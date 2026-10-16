@@ -295,3 +295,16 @@ Each host `HEARTBEAT` re-anchors `{ mediaTime, targetTimestamp }` (stamped with 
 
 ### 9. Late joiners (`JOIN_ROOM` → `ROOM_JOINED`)
 `ROOM_JOINED` carries the full snapshot: `roomState` (video, current movie, anchor, host), `currentMediaTime` (expected position right now), `serverTimestamp`, `queue`, `users` and the last 50 chat `messages`.
+
+### 10. Room existence (no implicit creation)
+Rooms exist only after `POST /api/rooms`. Visiting `/room/<code>` never creates one.
+- `GET /api/rooms/:code` → `404 { "success": false, "error": "Room does not exist" }` for unknown/expired codes. The client calls this **before** opening its socket and shows a *Room Not Found* card.
+- `JOIN_ROOM` for an unknown code → the socket is **not** added to any channel; the server emits `ROOM_ERROR { "message": "Room does not exist or has expired" }` (and acks `{ success: false, code: "ROOM_NOT_FOUND" }`).
+- Note: with the in-memory fallback, restarting the server wipes all rooms, so open tabs will show *Room Not Found* on reconnect. Use Redis to keep rooms across restarts.
+
+### 11. `EMIT_REACTION` → `REACTION_BROADCAST` (`reactionHandler.js`)
+Broadcast with `io.to(roomCode)` so the **whole room, sender included**, receives:
+```json
+{ "id": "react-…", "emoji": "🔥", "senderId": "soc_123", "senderName": "Hana", "timestamp": 1729040000000, "roomCode": "AB39ZK", "x": 42.1 }
+```
+Throttled to 8 reactions/second per socket; only sockets that joined the room may react.

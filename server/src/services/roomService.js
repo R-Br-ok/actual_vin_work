@@ -136,7 +136,29 @@ export function withRoomLock(roomCode, task) {
   return run;
 }
 
+export const ROOM_NOT_FOUND = 'ROOM_NOT_FOUND';
+
+/** Thrown when a socket tries to join a room that was never created (or has expired). */
+export class RoomNotFoundError extends Error {
+  constructor(roomCode) {
+    super('Room does not exist or has expired');
+    this.name = 'RoomNotFoundError';
+    this.code = ROOM_NOT_FOUND;
+    this.roomCode = roomCode;
+  }
+}
+
 export class RoomService {
+  /**
+   * True only for rooms explicitly created via POST /api/rooms (or RoomService.createRoom)
+   * that haven't expired.
+   */
+  static async roomExists(roomCode) {
+    const code = sanitizeRoomCode(roomCode);
+    if (!code) return false;
+    return (await redis.exists(getRoomKey(code))) === 1;
+  }
+
   /**
    * Generates a unique 6-character room code that doesn't collide in Redis.
    */
@@ -225,7 +247,8 @@ export class RoomService {
   }
 
   /**
-   * Adds or registers a user inside a room.
+   * Adds or registers a user inside an existing room.
+   * Rooms are never created implicitly: an unknown code throws RoomNotFoundError.
    * If the room has no host, this user becomes the host.
    */
   static async addUserToRoom(roomCode, socketId, username = 'Anonymous') {
@@ -236,13 +259,13 @@ export class RoomService {
     const joinedAt = Date.now();
 
     return withRoomLock(code, async () => {
-      let room = await this.getRoom(code);
+      const room = await this.getRoom(code);
 
-      // If room does not exist yet, auto-create it
       if (!room) {
-        await this.createRoom({ roomCode: code, hostSocketId: socketId });
-        room = await this.getRoom(code);
-      } else if (!room.hostSocketId) {
+        throw new RoomNotFoundError(code);
+      }
+
+      if (!room.hostSocketId) {
         // Assign host if none currently exists
         await redis.hset(roomKey, 'hostSocketId', socketId);
         room.hostSocketId = socketId;

@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "test": "node test/sync.test.js && node test/inmemory-crud.test.js && node test/broadcast.test.js && node test/realtime.test.js",
-    "test:unit": "node test/sync.test.js"
+    "test:unit": "node test/sync.test.js",
+    "benchmark": "node scripts/loadTest.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

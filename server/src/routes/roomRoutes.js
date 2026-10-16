@@ -1,11 +1,12 @@
 import { Router } from 'express';
-import { RoomService } from '../services/roomService.js';
+import { RoomService, sanitizeRoomCode } from '../services/roomService.js';
 
 const router = Router();
 
 /**
  * POST /api/rooms
- * Generates and initializes a new 6-character room.
+ * Generates and initializes a new 6-character room. This is the only way a room comes into
+ * existence — joining an unknown code via URL or socket is rejected.
  */
 router.post('/rooms', async (req, res) => {
   try {
@@ -26,17 +27,19 @@ router.post('/rooms', async (req, res) => {
 
 /**
  * GET /api/rooms/:code
- * Resolves direct-link joins and inspects room state.
+ * Validates a room before the client connects its socket (direct-link joins).
+ * 404 { success: false, error: "Room does not exist" } for unknown / expired codes.
  */
 router.get('/rooms/:code', async (req, res) => {
   try {
-    const { code } = req.params;
-    const room = await RoomService.getRoom(code);
+    const code = sanitizeRoomCode(req.params.code);
+    const room = code ? await RoomService.getRoom(code) : null;
 
     if (!room) {
       return res.status(404).json({
         success: false,
-        message: `Room with code '${code.toUpperCase()}' not found`,
+        error: 'Room does not exist',
+        roomCode: code || null,
       });
     }
 
@@ -51,7 +54,7 @@ router.get('/rooms/:code', async (req, res) => {
   } catch (err) {
     res.status(500).json({
       success: false,
-      message: err.message || 'Failed to fetch room info',
+      error: err.message || 'Failed to fetch room info',
     });
   }
 });

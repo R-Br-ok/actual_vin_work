@@ -6,7 +6,7 @@ import { useRoom } from '../../context/RoomContext';
 import { useDriftCorrection, computeExpectedMediaTime } from '../../hooks/useDriftCorrection';
 import { PlayerControls } from './PlayerControls';
 import { DriftIndicator } from './DriftIndicator';
-import { ReactionCanvas } from '../social/ReactionCanvas';
+import { ReactionCanvas } from './ReactionCanvas';
 import { ReactionBar } from '../social/ReactionBar';
 import { PLAYBACK_STATE, CONTROL_TYPE, HEARTBEAT_INTERVAL_MS } from '../../lib/constants';
 import { DEFAULT_VIDEO_URL } from '../../data/mockMovies';
@@ -36,7 +36,6 @@ export function VideoSyncPlayer() {
     clockOffset,
     rtt,
     isSynced,
-    reactions,
     triggerReaction,
     queue,
     playNext,
@@ -371,7 +370,7 @@ export function VideoSyncPlayer() {
           className="h-full w-full bg-black object-contain"
         />
 
-        <ReactionCanvas reactions={reactions} />
+        <ReactionCanvas />
 
         {/* Top overlay: now playing + telemetry */}
         <div

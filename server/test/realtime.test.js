@@ -5,6 +5,7 @@ import app from '../src/app.js';
 import { connectRedis, redis } from '../src/config/redis.js';
 import { initializeSockets } from '../src/sockets/index.js';
 import { EVENTS } from '../src/constants/events.js';
+import { RoomService } from '../src/services/roomService.js';
 
 console.log('--- Running Video / Queue / Late-Join Sync Test ---');
 
@@ -35,6 +36,26 @@ async function run() {
   const host = ClientIO(url, { transports: ['websocket'] });
   const viewer = ClientIO(url, { transports: ['websocket'] });
   await Promise.all([once(host, 'connect'), once(viewer, 'connect')]);
+
+  // 0. Unknown rooms are rejected — over REST and over the socket — and never auto-created
+  const missing = await fetch(`${url}/api/rooms/NOPE42`);
+  const missingBody = await missing.json();
+  assert.strictEqual(missing.status, 404);
+  assert.deepStrictEqual(
+    { success: missingBody.success, error: missingBody.error },
+    { success: false, error: 'Room does not exist' }
+  );
+
+  const roomError = once(viewer, EVENTS.ROOM_ERROR);
+  const badJoin = await emitAck(viewer, EVENTS.JOIN_ROOM, { roomCode: 'NOPE42', username: 'Vik' });
+  assert.strictEqual(badJoin.success, false);
+  assert.strictEqual((await roomError).message, 'Room does not exist or has expired');
+  assert.strictEqual(await RoomService.roomExists('NOPE42'), false, 'joining must not create the room');
+  const sneaky = await emitAck(viewer, EVENTS.EMIT_REACTION, { roomCode: 'NOPE42', emoji: '🔥' });
+  assert.strictEqual(sneaky.success, false, 'no reactions into a room you never joined');
+  console.log('[PASS] unknown room: GET 404 + ROOM_ERROR, nothing created');
+
+  await RoomService.createRoom({ roomCode: 'QA77Z' });
 
   const hostJoin = await emitAck(host, EVENTS.JOIN_ROOM, { roomCode: 'qa-77z', username: 'Hana' });
   assert.strictEqual(hostJoin.success, true);
@@ -109,6 +130,24 @@ async function run() {
   assert.strictEqual(syncMsg.mediaTime, 15);
   assert.ok(Math.abs(syncMsg.targetTimestamp - Date.now()) < 1000, 'heartbeat re-anchors targetTimestamp');
   console.log('[PASS] HEARTBEAT -> STATE_SYNC re-anchor');
+
+  // 4b. Reactions reach the whole room — sender included
+  const hostSees = once(host, EVENTS.REACTION_BROADCAST);
+  const viewerSees = once(viewer, EVENTS.REACTION_BROADCAST);
+  viewer.emit(EVENTS.EMIT_REACTION, { emoji: '🎉' });
+  const [rh, rv] = await Promise.all([hostSees, viewerSees]);
+  assert.deepStrictEqual(rh, rv, 'host and sender receive the identical payload');
+  assert.strictEqual(rh.emoji, '🎉');
+  assert.strictEqual(rh.senderId, viewer.id);
+  assert.strictEqual(rh.senderName, 'Vik');
+  assert.ok(rh.id && typeof rh.timestamp === 'number');
+
+  const viewerSeesHost = once(viewer, EVENTS.REACTION_BROADCAST);
+  const hostSeesOwn = once(host, EVENTS.REACTION_BROADCAST);
+  host.emit(EVENTS.EMIT_REACTION, { emoji: '🔥' });
+  const [fromHost] = await Promise.all([viewerSeesHost, hostSeesOwn]);
+  assert.strictEqual(fromHost.senderName, 'Hana');
+  console.log('[PASS] EMIT_REACTION -> REACTION_BROADCAST to host + all viewers (sender included)');
 
   // 5. Chat history + late joiner snapshot
   await emitAck(host, EVENTS.SEND_MESSAGE, { message: 'popcorn ready?' });

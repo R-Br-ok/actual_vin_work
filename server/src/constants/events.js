@@ -8,6 +8,7 @@ export const EVENTS = {
   ROOM_JOINED: 'ROOM_JOINED',
   USER_JOINED: 'USER_JOINED',
   USER_LEFT: 'USER_LEFT',
+  ROOM_ERROR: 'ROOM_ERROR', // JOIN_ROOM for a room that was never created / has expired
 
   // Media controls
   CONTROL_ACTION: 'CONTROL_ACTION',
