@@ -1,0 +1,10 @@
+{
+  "description": "Stream a vast library of movies with an elegant dark-themed interface, designed for effortless browsing and an immersive viewing experience.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

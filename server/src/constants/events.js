@@ -1,0 +1,32 @@
+export const EVENTS = {
+  // Clock synchronization
+  SYNC_CLOCK: 'SYNC_CLOCK',
+  SYNC_CLOCK_RESPONSE: 'SYNC_CLOCK_RESPONSE',
+
+  // Room lifecycle
+  JOIN_ROOM: 'JOIN_ROOM',
+  ROOM_JOINED: 'ROOM_JOINED',
+  USER_JOINED: 'USER_JOINED',
+  USER_LEFT: 'USER_LEFT',
+
+  // Media controls
+  CONTROL_ACTION: 'CONTROL_ACTION',
+  CONTROL_ACTION_BROADCAST: 'CONTROL_ACTION_BROADCAST',
+
+  // Heartbeat & status
+  HEARTBEAT: 'HEARTBEAT',
+  HEARTBEAT_ACK: 'HEARTBEAT_ACK',
+
+  // Social (Chat & Reactions)
+  SEND_MESSAGE: 'SEND_MESSAGE',
+  NEW_MESSAGE: 'NEW_MESSAGE',
+  EMIT_REACTION: 'EMIT_REACTION',
+  REACTION_BROADCAST: 'REACTION_BROADCAST',
+
+  // Host election & errors
+  HOST_CHANGED: 'HOST_CHANGED',
+  ERROR: 'ERROR',
+
+  // Connection
+  DISCONNECT: 'disconnect',
+};
