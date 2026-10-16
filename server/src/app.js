@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { ENV } from './config/env.js';
+import { resolveCorsOrigin } from './config/env.js';
 import healthRoutes from './routes/healthRoutes.js';
 import roomRoutes from './routes/roomRoutes.js';
 
@@ -8,7 +8,7 @@ const app = express();
 
 // Middlewares
 app.use(cors({
-  origin: ENV.CORS_ORIGIN,
+  origin: resolveCorsOrigin(),
   credentials: true,
 }));
 

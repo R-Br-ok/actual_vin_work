@@ -1,5 +1,5 @@
 export const EVENTS = {
-  // Clock synchronization
+  // Clock synchronization (NTP-style ping/pong)
   SYNC_CLOCK: 'SYNC_CLOCK',
   SYNC_CLOCK_RESPONSE: 'SYNC_CLOCK_RESPONSE',
 
@@ -13,9 +13,18 @@ export const EVENTS = {
   CONTROL_ACTION: 'CONTROL_ACTION',
   CONTROL_ACTION_BROADCAST: 'CONTROL_ACTION_BROADCAST',
 
+  // Video source switching
+  CHANGE_VIDEO: 'CHANGE_VIDEO',
+  VIDEO_CHANGED: 'VIDEO_CHANGED',
+
+  // Shared watch queue
+  UPDATE_QUEUE: 'UPDATE_QUEUE',
+  QUEUE_UPDATED: 'QUEUE_UPDATED',
+
   // Heartbeat & status
   HEARTBEAT: 'HEARTBEAT',
   HEARTBEAT_ACK: 'HEARTBEAT_ACK',
+  STATE_SYNC: 'STATE_SYNC', // host heartbeat re-anchor relayed to viewers
 
   // Social (Chat & Reactions)
   SEND_MESSAGE: 'SEND_MESSAGE',

@@ -1,16 +1,18 @@
 import { Server } from 'socket.io';
-import { ENV } from '../config/env.js';
+import { resolveCorsOrigin } from '../config/env.js';
 import { registerClockHandler } from './handlers/clockHandler.js';
 import { registerRoomHandler } from './handlers/roomHandler.js';
 import { registerControlHandler } from './handlers/controlHandler.js';
 import { registerHeartbeatHandler } from './handlers/heartbeatHandler.js';
 import { registerDisconnectHandler } from './handlers/disconnectHandler.js';
 import { registerSocialHandler } from './handlers/socialHandler.js';
+import { registerVideoHandler } from './handlers/videoHandler.js';
+import { registerQueueHandler } from './handlers/queueHandler.js';
 
 export function initializeSockets(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin: ENV.CORS_ORIGIN,
+      origin: resolveCorsOrigin(),
       methods: ['GET', 'POST'],
       credentials: true,
     },
@@ -27,6 +29,8 @@ export function initializeSockets(httpServer) {
     registerHeartbeatHandler(io, socket);
     registerDisconnectHandler(io, socket);
     registerSocialHandler(io, socket);
+    registerVideoHandler(io, socket);
+    registerQueueHandler(io, socket);
   });
 
   return io;

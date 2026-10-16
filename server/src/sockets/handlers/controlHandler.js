@@ -1,55 +1,44 @@
 import { EVENTS } from '../../constants/events.js';
 import { RoomService } from '../../services/roomService.js';
-import { redis } from '../../config/redis.js';
+import { resolveSocketRoom, roomTarget, replyError } from '../socketUtils.js';
 
+/**
+ * CONTROL_ACTION (host only): PLAY / PAUSE / SEEK.
+ * The new media anchor is broadcast to everyone in the room (host included) as
+ * CONTROL_ACTION_BROADCAST so each client can compute
+ *   expected = mediaTime + (serverNow - targetTimestamp) / 1000 * playbackRate
+ */
 export function registerControlHandler(io, socket) {
   socket.on(EVENTS.CONTROL_ACTION, async (payload = {}, callback) => {
     try {
-      let { roomCode, action, mediaTime, playbackRate, videoUrl } = payload;
+      const { action, mediaTime, playbackRate, videoUrl, clientTimestamp } = payload;
+      const { roomCode } = await resolveSocketRoom(socket, payload.roomCode);
 
-      // If roomCode not explicitly sent, retrieve from socket session
-      if (!roomCode) {
-        const socketData = await redis.hgetall(`socket:${socket.id}`);
-        roomCode = socketData?.roomCode;
-      }
-
-      if (!roomCode) {
-        throw new Error('Room code is required for control actions');
-      }
-
-      if (!action || !['PLAY', 'PAUSE', 'SEEK'].includes(action.toUpperCase())) {
+      if (!action || typeof action !== 'string' || !['PLAY', 'PAUSE', 'SEEK'].includes(action.toUpperCase())) {
         throw new Error('Invalid control action. Must be PLAY, PAUSE, or SEEK');
       }
 
       const parsedMediaTime = parseFloat(mediaTime ?? 0);
       const parsedRate = parseFloat(playbackRate ?? 1.0);
-      const cleanCode = roomCode.toUpperCase();
 
-      const controlResult = await RoomService.handleControlAction(cleanCode, socket.id, {
+      const controlResult = await RoomService.handleControlAction(roomCode, socket.id, {
         action: action.toUpperCase(),
-        mediaTime: isNaN(parsedMediaTime) ? 0 : parsedMediaTime,
-        playbackRate: isNaN(parsedRate) ? 1.0 : parsedRate,
+        mediaTime: Number.isFinite(parsedMediaTime) ? parsedMediaTime : 0,
+        playbackRate: Number.isFinite(parsedRate) ? parsedRate : 1.0,
         videoUrl,
+        clientTimestamp,
       });
 
-      // Broadcast action with atomic server timestamp to all room members
-      io.to(cleanCode).to(`room:${cleanCode}`).emit(EVENTS.CONTROL_ACTION_BROADCAST, controlResult);
+      // Broadcast action with authoritative anchor timestamp to all room members
+      roomTarget(io, roomCode).emit(EVENTS.CONTROL_ACTION_BROADCAST, controlResult);
 
       if (typeof callback === 'function') {
         callback({ success: true, ...controlResult });
       }
 
-      console.log(`[Control] Room ${roomCode}: ${controlResult.action} at ${controlResult.mediaTime}s by ${socket.id}`);
+      console.log(`[Control] Room ${roomCode}: ${controlResult.action} at ${controlResult.mediaTime.toFixed(2)}s by ${socket.id}`);
     } catch (err) {
-      console.error('[Control] CONTROL_ACTION error:', err.message);
-      const errorResponse = {
-        success: false,
-        message: err.message || 'Failed to process control action',
-      };
-      socket.emit(EVENTS.ERROR, errorResponse);
-      if (typeof callback === 'function') {
-        callback(errorResponse);
-      }
+      replyError(socket, callback, err, 'CONTROL_ACTION');
     }
   });
 }

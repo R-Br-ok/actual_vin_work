@@ -2,22 +2,22 @@
 
 import React from 'react';
 
+/**
+ * Floating emoji overlay rendered above the video. Each reaction rises with a
+ * per-reaction sideways drift and scale (CSS vars consumed by the keyframes).
+ */
 export function ReactionCanvas({ reactions }) {
-  if (!reactions || reactions.length === 0) return null;
-
   return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
+    <div className="pointer-events-none absolute inset-0 z-30 overflow-hidden" aria-hidden="true">
       {reactions.map((r) => (
         <div
           key={r.id}
-          className="absolute bottom-6 animate-float-up flex flex-col items-center select-none"
-          style={{ left: `${r.x}%` }}
+          className="absolute bottom-20 flex animate-reaction-float flex-col items-center"
+          style={{ left: `${r.x}%`, '--drift': `${r.drift ?? 0}px`, '--scale': r.scale ?? 1 }}
         >
-          <span className="text-3xl filter drop-shadow-lg transform transition-transform hover:scale-125">
-            {r.emoji}
-          </span>
+          <span className="text-4xl drop-shadow-[0_6px_14px_rgba(0,0,0,0.55)] md:text-5xl">{r.emoji}</span>
           {r.sender && (
-            <span className="text-[10px] bg-black/60 text-white/90 px-1.5 py-0.5 rounded-full mt-1 backdrop-blur-sm">
+            <span className="mt-1 max-w-[120px] truncate rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium text-white/90 backdrop-blur-sm">
               {r.sender}
             </span>
           )}

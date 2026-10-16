@@ -16,7 +16,9 @@ export function registerDisconnectHandler(io, socket) {
       // Notify remaining users that participant left
       io.to(roomChannel).emit(EVENTS.USER_LEFT, {
         socketId: socket.id,
+        username: result.username,
         totalUsers: result.remainingCount,
+        users: result.users,
       });
 
       // If host disconnected and a successor was chosen based on session longevity

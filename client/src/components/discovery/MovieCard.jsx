@@ -1,70 +1,66 @@
 'use client';
 
 import React from 'react';
-import { Play, Plus, Check } from 'lucide-react';
+import { Play, Plus, Check, Crown } from 'lucide-react';
+import { PosterImage } from '../ui/PosterImage';
+import { cn } from '../../lib/utils';
 
-export function MovieCard({
-  movie,
-  index,
-  isHost,
-  onPlay,
-  onAddToQueue,
-  isQueued,
-}) {
+export function MovieCard({ movie, isHost, isPlaying, isQueued, onPlay, onAddToQueue }) {
   return (
-    <article className="film-card group select-none">
-      {/* Film Poster Art */}
-      <div className="relative overflow-hidden aspect-[0.72] rounded border border-line bg-panel transition">
-        <img
+    <article className="group flex flex-col overflow-hidden rounded-2xl border border-white/[0.07] bg-panel/60 transition hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-glow">
+      <div className="relative aspect-video overflow-hidden bg-ink">
+        <PosterImage
           src={movie.image}
           alt={movie.title}
-          className="w-full h-full object-cover filter saturate-[0.75] group-hover:saturate-100 group-hover:scale-105 transition-all duration-300"
+          className="saturate-[0.85] transition duration-500 group-hover:scale-105 group-hover:saturate-100"
         />
-
-        {/* Number Badge */}
-        <span className="absolute bottom-2 left-2.5 z-10 font-bold text-[10px] tracking-wider text-white/70">
-          {(index + 1).toString().padStart(2, '0')}
+        <div className="absolute inset-0 bg-gradient-to-t from-panel via-transparent to-transparent" />
+        <span className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold text-white/90 backdrop-blur">
+          {movie.category}
         </span>
-
-        {/* Hover Action Overlay */}
-        <div className="absolute inset-0 z-20 flex items-center justify-center gap-3 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-          {/* Play Now Button */}
-          {isHost && (
-            <button
-              onClick={() => onPlay(movie)}
-              className="flex items-center justify-center w-11 h-11 rounded-full bg-panel/80 border border-white/60 hover:border-accent hover:text-accent backdrop-blur-md transition transform hover:scale-110 active:scale-95"
-              title="Play Now in Room"
-            >
-              <Play size={18} fill="currentColor" className="ml-0.5" />
-            </button>
-          )}
-
-          {/* Add to Queue Button */}
-          <button
-            onClick={() => onAddToQueue(movie)}
-            className={`flex items-center justify-center w-9 h-9 rounded-full border backdrop-blur-md transition transform hover:scale-110 active:scale-95 ${
-              isQueued
-                ? 'bg-accent/20 border-accent text-accent'
-                : 'bg-panel/80 border-white/50 text-white hover:border-accent hover:text-accent'
-            }`}
-            title={isQueued ? 'Added to Queue' : 'Add to Party Queue'}
-          >
-            {isQueued ? <Check size={16} /> : <Plus size={16} />}
-          </button>
-        </div>
+        {isPlaying && (
+          <span className="absolute right-2 top-2 rounded-full bg-rose-500/90 px-2 py-0.5 text-[10px] font-bold text-white">NOW PLAYING</span>
+        )}
       </div>
 
-      {/* Film Information */}
-      <div className="pt-2 flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="font-serif text-sm font-normal text-app-text truncate group-hover:text-accent transition">
-            {movie.title}
-          </h3>
-          <p className="text-[10px] text-muted truncate">{movie.meta}</p>
+      <div className="flex flex-1 flex-col gap-2 p-3.5">
+        <div>
+          <h3 className="truncate font-serif text-base text-app-text">{movie.title}</h3>
+          <p className="truncate text-[11px] text-muted">
+            {movie.meta}
+            {movie.director && <> · {movie.director}</>}
+          </p>
         </div>
-        <span className="text-[10px] text-secondary font-medium whitespace-nowrap">
-          {movie.match}
-        </span>
+        <p className="line-clamp-2 text-xs leading-relaxed text-muted/90">{movie.description}</p>
+        <div className="flex flex-wrap gap-1">
+          {(movie.genres || [movie.genre]).map((g) => (
+            <span key={g} className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-app-text/70">
+              {g}
+            </span>
+          ))}
+        </div>
+
+        <div className="mt-auto flex gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => onPlay(movie)}
+            disabled={!isHost}
+            className="btn-primary flex-1 px-3 py-2 text-xs"
+            title={isHost ? 'Switch everyone to this movie now' : 'Only the host can switch movies'}
+          >
+            {isHost ? <Play size={13} fill="currentColor" /> : <Crown size={13} />}
+            {isHost ? 'Play now' : 'Host only'}
+          </button>
+          <button
+            type="button"
+            onClick={() => onAddToQueue(movie)}
+            className={cn('btn-ghost px-3 py-2 text-xs', isQueued && 'border-accent/40 text-accent-soft')}
+            title={isQueued ? 'Already in the queue — add again?' : 'Add to the shared queue'}
+          >
+            {isQueued ? <Check size={13} /> : <Plus size={13} />}
+            {isQueued ? 'Queued' : 'Queue'}
+          </button>
+        </div>
       </div>
     </article>
   );

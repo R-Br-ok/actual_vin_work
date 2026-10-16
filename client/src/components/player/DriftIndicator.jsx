@@ -1,48 +1,76 @@
 'use client';
 
-import React from 'react';
-import { Wifi, Activity, Clock } from 'lucide-react';
+import React, { useState } from 'react';
+import { Activity, Gauge, Wifi } from 'lucide-react';
+import { DRIFT_STATUS } from '../../hooks/useDriftCorrection';
+import { cn } from '../../lib/utils';
 
-export function DriftIndicator({ rtt, clockOffset, driftInfo, isHost }) {
-  const { driftSeconds, currentRate, action } = driftInfo;
-  const driftMs = Math.round(driftSeconds * 1000);
+const STATUS_META = {
+  [DRIFT_STATUS.ALIGNED]: { label: 'Aligned', tone: 'good' },
+  [DRIFT_STATUS.SPEED_UP]: { label: 'Catching up', tone: 'warn' },
+  [DRIFT_STATUS.SLOW_DOWN]: { label: 'Easing back', tone: 'warn' },
+  [DRIFT_STATUS.HARD_SEEK]: { label: 'Re-synced', tone: 'bad' },
+  [DRIFT_STATUS.BUFFERING]: { label: 'Buffering', tone: 'warn' },
+  [DRIFT_STATUS.PAUSED]: { label: 'Paused', tone: 'idle' },
+  [DRIFT_STATUS.BLOCKED]: { label: 'Tap to play', tone: 'warn' },
+  [DRIFT_STATUS.MASTER]: { label: 'Master clock', tone: 'good' },
+  [DRIFT_STATUS.IDLE]: { label: 'Syncing', tone: 'idle' },
+};
 
-  const getStatusColor = () => {
-    if (isHost) return 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10';
-    if (Math.abs(driftMs) <= 100) return 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10';
-    if (Math.abs(driftMs) <= 500) return 'text-amber-400 border-amber-500/30 bg-amber-500/10';
-    return 'text-rose-400 border-rose-500/30 bg-rose-500/10';
-  };
+const TONE_DOT = {
+  good: 'bg-emerald-400 shadow-emerald-400/70',
+  warn: 'bg-amber-400 shadow-amber-400/70',
+  bad: 'bg-rose-400 shadow-rose-400/70',
+  idle: 'bg-slate-400 shadow-slate-400/40',
+};
+
+const fmtMs = (ms) => `${ms > 0 ? '+' : ''}${ms}ms`;
+
+/**
+ * Live telemetry pill: RTT · Drift · Playback rate (click for clock offset details).
+ */
+export function DriftIndicator({ rtt, clockOffset, driftInfo, isHost, isSynced }) {
+  const [expanded, setExpanded] = useState(false);
+  const meta = STATUS_META[driftInfo.status] || STATUS_META[DRIFT_STATUS.IDLE];
+  const tone = !isSynced ? 'idle' : meta.tone;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 text-[11px] font-medium tracking-wide">
-      {/* Sync Status Badge */}
-      <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border backdrop-blur-md ${getStatusColor()}`}>
-        <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-        <span>
-          {isHost ? 'Host Master Clock' : action === 'IN_SYNC' ? 'Synced' : action}
+    <button
+      type="button"
+      onClick={() => setExpanded((v) => !v)}
+      className="glass-overlay pointer-events-auto flex flex-col items-stretch rounded-2xl px-3 py-1.5 text-left font-mono text-[11px] text-app-text/90 transition hover:border-white/20"
+      title="Sync telemetry — click for details"
+    >
+      <span className="flex items-center gap-3">
+        <span className="flex items-center gap-1.5 font-sans font-semibold">
+          <span className={cn('h-1.5 w-1.5 rounded-full shadow-[0_0_8px]', TONE_DOT[tone])} />
+          {isSynced ? meta.label : 'Clock sync…'}
         </span>
-      </div>
-
-      {/* RTT Badge */}
-      <div className="flex items-center gap-1 px-2 py-1 rounded-full border border-line bg-panel-soft/60 text-muted backdrop-blur-md">
-        <Wifi size={12} className="text-secondary" />
-        <span>RTT: {rtt}ms</span>
-      </div>
-
-      {/* Offset Badge */}
-      <div className="flex items-center gap-1 px-2 py-1 rounded-full border border-line bg-panel-soft/60 text-muted backdrop-blur-md">
-        <Clock size={12} className="text-accent" />
-        <span>Offset: {clockOffset > 0 ? `+${clockOffset}` : clockOffset}ms</span>
-      </div>
-
-      {/* Drift Badge */}
-      {!isHost && (
-        <div className="flex items-center gap-1 px-2 py-1 rounded-full border border-line bg-panel-soft/60 text-muted backdrop-blur-md">
-          <Activity size={12} />
-          <span>Drift: {driftMs > 0 ? `+${driftMs}` : driftMs}ms ({currentRate}x)</span>
-        </div>
+        <span className="flex items-center gap-1 text-app-text/75" aria-label="Round trip time">
+          <Wifi size={11} className="text-secondary" />
+          {rtt}ms
+        </span>
+        <span className="flex items-center gap-1 text-app-text/75" aria-label="Drift">
+          <Activity size={11} className="text-accent-soft" />
+          {isHost ? '—' : fmtMs(driftInfo.driftMs)}
+        </span>
+        <span className="flex items-center gap-1 text-app-text/75" aria-label="Playback rate">
+          <Gauge size={11} className="text-amber-300" />
+          {Number(driftInfo.rate || 1).toFixed(2)}×
+        </span>
+      </span>
+      {expanded && (
+        <span className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-0.5 border-t border-white/10 pt-1.5 text-[10px] text-muted">
+          <span>offset θ</span>
+          <span className="text-right text-app-text/80">{fmtMs(clockOffset)}</span>
+          <span>expected</span>
+          <span className="text-right text-app-text/80">{driftInfo.expected.toFixed(2)}s</span>
+          <span>actual</span>
+          <span className="text-right text-app-text/80">{driftInfo.actual.toFixed(2)}s</span>
+          <span>role</span>
+          <span className="text-right text-app-text/80">{isHost ? 'host' : 'viewer'}</span>
+        </span>
       )}
-    </div>
+    </button>
   );
 }

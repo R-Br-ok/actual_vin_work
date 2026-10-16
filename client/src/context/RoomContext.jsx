@@ -1,322 +1,375 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSocket } from './SocketContext';
 import { useClockSync } from '../hooks/useClockSync';
-import { SOCKET_EVENTS, PLAYBACK_STATE, CONTROL_TYPE } from '../lib/constants';
-import { MOCK_MOVIES } from '../data/mockMovies';
+import { SOCKET_EVENTS } from '../lib/constants';
 
 const RoomContext = createContext(null);
 
-export function RoomProvider({ roomCode: initialRoomCode, username = 'MovieBuff', children }) {
-  const { socket, isConnected } = useSocket();
-  const { clockOffset, rtt, isSynced, getServerTime } = useClockSync(socket, isConnected);
+const MAX_CHAT_MESSAGES = 200;
+const MAX_LIVE_REACTIONS = 40;
+const REACTION_LIFETIME_MS = 3200;
+
+function systemMessage(text) {
+  return {
+    id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    sender: 'System',
+    text,
+    timestamp: Date.now(),
+    isSystem: true,
+  };
+}
+
+function normalizeMessage(msg) {
+  return {
+    id: msg.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    sender: msg.username || msg.sender || 'Anonymous',
+    text: msg.message || msg.text || '',
+    timestamp: msg.timestamp || Date.now(),
+    isHost: Boolean(msg.isHost),
+    socketId: msg.socketId,
+  };
+}
+
+/** Picks just the media-anchor fields out of a server payload. */
+function anchorFrom(payload) {
+  const anchor = {};
+  if (payload.playbackState) anchor.playbackState = payload.playbackState;
+  if (payload.mediaTime !== undefined) anchor.mediaTime = Number(payload.mediaTime) || 0;
+  const ts = payload.targetTimestamp ?? payload.serverTimestamp;
+  if (ts !== undefined) anchor.targetTimestamp = Number(ts);
+  if (payload.playbackRate !== undefined) anchor.playbackRate = Number(payload.playbackRate) || 1;
+  return anchor;
+}
+
+export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', children }) {
+  const { socket, isConnected, connectionError } = useSocket();
+  const clock = useClockSync(socket, isConnected);
+  const { getServerTime } = clock;
 
   const [roomCode, setRoomCode] = useState(initialRoomCode?.toUpperCase() || '');
-  const [isHost, setIsHost] = useState(false);
+  const [selfId, setSelfId] = useState(null);
   const [roomState, setRoomState] = useState(null);
+  // Bumped whenever playback must be re-aligned immediately (join, control action, video change).
+  // STATE_SYNC heartbeats update the anchor silently and leave correction to the 3s drift loop.
+  const [syncEpoch, setSyncEpoch] = useState(0);
+  const [lastEvent, setLastEvent] = useState(null);
   const [users, setUsers] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  // Social Features State
-  const [chatMessages, setChatMessages] = useState([
-    {
-      id: 'welcome-msg',
-      sender: 'System',
-      text: 'Welcome to the Watch Party! Synchronized video playback is active.',
-      timestamp: Date.now(),
-      isSystem: true,
-    },
-  ]);
+  const [queue, setQueue] = useState([]);
+  const [chatMessages, setChatMessages] = useState([]);
   const [reactions, setReactions] = useState([]);
-  const [playlist, setPlaylist] = useState(MOCK_MOVIES.slice(0, 3));
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRejoining, setIsRejoining] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
 
-  const roomStateRef = useRef(roomState);
+  const hasJoinedRef = useRef(false);
+  const roomStateRef = useRef(null);
   roomStateRef.current = roomState;
+  const noticeTimerRef = useRef(null);
 
-  // 1. Join Room & Consume Late-Join State
+  const isHost = Boolean(roomState && selfId && roomState.hostSocketId === selfId);
+
+  const showNotice = useCallback((text, tone = 'error') => {
+    setNotice({ text, tone, id: Date.now() });
+    clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => setNotice(null), 4000);
+  }, []);
+
+  const pushChat = useCallback((entry) => {
+    setChatMessages((prev) => {
+      if (prev.some((m) => m.id === entry.id)) return prev;
+      const next = [...prev, entry];
+      return next.length > MAX_CHAT_MESSAGES ? next.slice(-MAX_CHAT_MESSAGES) : next;
+    });
+  }, []);
+
+  // 1. Join (and transparently re-join after reconnects) — consumes the late-join snapshot
   useEffect(() => {
     if (!socket || !isConnected || !roomCode) return;
 
-    setIsLoading(true);
-    console.log(`[Room] Joining room: ${roomCode} as ${username}...`);
+    if (hasJoinedRef.current) setIsRejoining(true);
+    else setIsLoading(true);
 
-    socket.emit(
-      SOCKET_EVENTS.JOIN_ROOM,
-      { roomCode, username },
-      (response) => {
-        if (!response || !response.success) {
-          setError(response?.message || 'Failed to connect to room');
-          setIsLoading(false);
-          return;
-        }
-
-        console.log('[Room] Joined successfully:', response);
-        setRoomCode(response.roomCode);
-        setIsHost(response.isHost);
-        setRoomState(response.roomState);
-        setUsers(response.users || []);
+    socket.timeout(8000).emit(SOCKET_EVENTS.JOIN_ROOM, { roomCode, username }, (err, response) => {
+      setIsRejoining(false);
+      if (err || !response?.success) {
+        const message = err ? 'The sync server did not answer in time.' : response?.message || 'Failed to join room';
+        if (!hasJoinedRef.current) setError(message);
+        else showNotice(message);
         setIsLoading(false);
+        return;
       }
-    );
-  }, [socket, isConnected, roomCode, username]);
 
-  // 2. Register Socket Listeners for Real-time Synchronization
+      const firstJoin = !hasJoinedRef.current;
+      hasJoinedRef.current = true;
+
+      setSelfId(response.selfSocketId || socket.id);
+      setRoomCode(response.roomCode);
+      setRoomState(response.roomState);
+      setUsers(response.users || []);
+      setQueue(response.queue || response.roomState?.queue || []);
+      setLastEvent({ type: 'JOIN', issuedBy: null });
+      setSyncEpoch((n) => n + 1);
+
+      if (firstJoin) {
+        const history = (response.messages || []).map(normalizeMessage);
+        setChatMessages([
+          ...history,
+          systemMessage(
+            response.isHost
+              ? `You're hosting room ${response.roomCode}. Share the link to invite friends.`
+              : `Joined room ${response.roomCode}. Playback follows the host.`
+          ),
+        ]);
+      }
+      setError(null);
+      setIsLoading(false);
+    });
+  }, [socket, isConnected, roomCode, username, showNotice]);
+
+  // 2. Real-time listeners
   useEffect(() => {
-    if (!socket) return;
+    if (!socket) return undefined;
 
-    // A. Participant joined
     const handleUserJoined = (data) => {
-      console.log('[Room] Participant joined:', data);
-      setUsers((prev) => {
-        const exists = prev.some((u) => u.socketId === data.socketId);
-        if (exists) return prev;
-        return [...prev, { socketId: data.socketId, username: data.username, joinedAt: data.joinedAt, isHost: false }];
-      });
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `join-${Date.now()}-${Math.random()}`,
-          sender: 'System',
-          text: `${data.username} joined the party.`,
-          timestamp: Date.now(),
-          isSystem: true,
-        },
-      ]);
+      if (Array.isArray(data.users)) setUsers(data.users);
+      else
+        setUsers((prev) =>
+          prev.some((u) => u.socketId === data.socketId)
+            ? prev
+            : [...prev, { socketId: data.socketId, username: data.username, joinedAt: data.joinedAt, isHost: false }]
+        );
+      pushChat(systemMessage(`${data.username} joined the party.`));
     };
 
-    // B. Participant left
     const handleUserLeft = (data) => {
-      console.log('[Room] Participant left:', data);
-      setUsers((prev) => prev.filter((u) => u.socketId !== data.socketId));
+      if (Array.isArray(data.users)) setUsers(data.users);
+      else setUsers((prev) => prev.filter((u) => u.socketId !== data.socketId));
+      if (data.username) pushChat(systemMessage(`${data.username} left.`));
     };
 
-    // C. Host changed failover
     const handleHostChanged = (data) => {
-      console.log('[Room] Host changed:', data);
-      const amINewHost = socket.id === data.newHostSocketId;
-      setIsHost(amINewHost);
       setRoomState((prev) => (prev ? { ...prev, hostSocketId: data.newHostSocketId } : prev));
-      setUsers((prev) =>
-        prev.map((u) => ({
-          ...u,
-          isHost: u.socketId === data.newHostSocketId,
-        }))
+      setUsers((prev) => prev.map((u) => ({ ...u, isHost: u.socketId === data.newHostSocketId })));
+      pushChat(
+        systemMessage(
+          socket.id === data.newHostSocketId
+            ? 'You are now the host — playback controls are yours.'
+            : `${data.newHostUsername || 'The longest-connected viewer'} is now hosting.`
+        )
       );
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `host-${Date.now()}`,
-          sender: 'System',
-          text: amINewHost ? 'You are now the room host!' : 'Host privilege was reassigned to the oldest active member.',
-          timestamp: Date.now(),
-          isSystem: true,
-        },
-      ]);
     };
 
-    // D. Control Action Broadcast (PLAY, PAUSE, SEEK)
-    // D. Control Action Broadcast (PLAY, PAUSE, SEEK)
-    const handleControlActionBroadcast = (payload) => {
-      console.log('[Room] Received control broadcast:', payload);
-      setRoomState((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          videoUrl: payload.videoUrl || prev.videoUrl,
-          playbackState: payload.playbackState,
-          mediaTime: payload.mediaTime,
-          targetTimestamp: payload.serverTimestamp,
-        };
-      });
+    const handleControlBroadcast = (payload) => {
+      setRoomState((prev) => (prev ? { ...prev, ...anchorFrom(payload), videoUrl: payload.videoUrl || prev.videoUrl } : prev));
+      setLastEvent({ type: 'CONTROL', action: payload.action, issuedBy: payload.issuedBy });
+      setSyncEpoch((n) => n + 1);
     };
 
-    // E. Social: Chat Message Broadcast (NEW_MESSAGE)
-    const handleNewMessage = (msg) => {
-      console.log('[Room] Received NEW_MESSAGE:', msg);
-      setChatMessages((prev) => {
-        if (prev.some((m) => m.id === msg.id)) return prev;
-        return [
-          ...prev,
-          {
-            id: msg.id || `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            sender: msg.username || msg.sender || 'Anonymous',
-            text: msg.message || msg.text || '',
-            timestamp: msg.timestamp || Date.now(),
-            isHost: msg.isHost || false,
-          },
-        ];
-      });
+    const handleVideoChanged = (payload) => {
+      setRoomState((prev) => ({
+        ...(prev || {}),
+        ...anchorFrom(payload),
+        videoUrl: payload.videoUrl,
+        currentMovie: payload.movie || { title: 'Custom stream', videoUrl: payload.videoUrl },
+      }));
+      setLastEvent({ type: 'VIDEO', autoplay: payload.autoplay, issuedBy: payload.issuedBy });
+      setSyncEpoch((n) => n + 1);
+      pushChat(systemMessage(`Now playing: ${payload.movie?.title || 'a new video'}`));
     };
 
-    // F. Social: Emoji Reaction Broadcast (REACTION_BROADCAST)
-    const handleReactionBroadcast = (reaction) => {
-      console.log('[Room] Received REACTION_BROADCAST:', reaction);
+    const handleStateSync = (payload) => {
+      const prev = roomStateRef.current;
+      setRoomState((current) => (current ? { ...current, ...anchorFrom(payload) } : current));
+      // A heartbeat that flips play/pause (e.g. host used media keys) needs an immediate re-align
+      if (prev && payload.playbackState && payload.playbackState !== prev.playbackState) {
+        setLastEvent({ type: 'SYNC', issuedBy: null });
+        setSyncEpoch((n) => n + 1);
+      }
+    };
+
+    const handleQueueUpdated = (payload) => {
+      if (Array.isArray(payload?.queue)) setQueue(payload.queue);
+    };
+
+    const handleNewMessage = (msg) => pushChat(normalizeMessage(msg));
+
+    const handleReaction = (reaction) => {
       const formatted = {
         id: reaction.id || `react-${Date.now()}-${Math.random()}`,
         emoji: reaction.emoji,
         sender: reaction.username || reaction.sender || 'Anonymous',
         x: reaction.x ?? Math.random() * 80 + 10,
+        drift: (Math.random() - 0.5) * 60,
+        scale: 0.85 + Math.random() * 0.5,
       };
-      setReactions((prev) => [...prev, formatted]);
-      setTimeout(() => {
-        setReactions((prev) => prev.filter((r) => r.id !== formatted.id));
-      }, 2500);
+      setReactions((prev) => [...prev.slice(-(MAX_LIVE_REACTIONS - 1)), formatted]);
+      setTimeout(() => setReactions((prev) => prev.filter((r) => r.id !== formatted.id)), REACTION_LIFETIME_MS);
     };
 
-    // G. Social: Playlist update
-    const handlePlaylistUpdate = (newPlaylist) => {
-      setPlaylist(newPlaylist);
+    const handleError = (payload) => {
+      if (payload?.message) showNotice(payload.message);
     };
 
     socket.on(SOCKET_EVENTS.USER_JOINED, handleUserJoined);
     socket.on(SOCKET_EVENTS.USER_LEFT, handleUserLeft);
     socket.on(SOCKET_EVENTS.HOST_CHANGED, handleHostChanged);
-    socket.on(SOCKET_EVENTS.CONTROL_ACTION_BROADCAST, handleControlActionBroadcast);
+    socket.on(SOCKET_EVENTS.CONTROL_ACTION_BROADCAST, handleControlBroadcast);
+    socket.on(SOCKET_EVENTS.VIDEO_CHANGED, handleVideoChanged);
+    socket.on(SOCKET_EVENTS.STATE_SYNC, handleStateSync);
+    socket.on(SOCKET_EVENTS.QUEUE_UPDATED, handleQueueUpdated);
     socket.on(SOCKET_EVENTS.NEW_MESSAGE, handleNewMessage);
-    socket.on(SOCKET_EVENTS.REACTION_BROADCAST, handleReactionBroadcast);
-    socket.on(SOCKET_EVENTS.PLAYLIST_UPDATE, handlePlaylistUpdate);
+    socket.on(SOCKET_EVENTS.REACTION_BROADCAST, handleReaction);
+    socket.on(SOCKET_EVENTS.ERROR, handleError);
 
     return () => {
       socket.off(SOCKET_EVENTS.USER_JOINED, handleUserJoined);
       socket.off(SOCKET_EVENTS.USER_LEFT, handleUserLeft);
       socket.off(SOCKET_EVENTS.HOST_CHANGED, handleHostChanged);
-      socket.off(SOCKET_EVENTS.CONTROL_ACTION_BROADCAST, handleControlActionBroadcast);
+      socket.off(SOCKET_EVENTS.CONTROL_ACTION_BROADCAST, handleControlBroadcast);
+      socket.off(SOCKET_EVENTS.VIDEO_CHANGED, handleVideoChanged);
+      socket.off(SOCKET_EVENTS.STATE_SYNC, handleStateSync);
+      socket.off(SOCKET_EVENTS.QUEUE_UPDATED, handleQueueUpdated);
       socket.off(SOCKET_EVENTS.NEW_MESSAGE, handleNewMessage);
-      socket.off(SOCKET_EVENTS.REACTION_BROADCAST, handleReactionBroadcast);
-      socket.off(SOCKET_EVENTS.PLAYLIST_UPDATE, handlePlaylistUpdate);
+      socket.off(SOCKET_EVENTS.REACTION_BROADCAST, handleReaction);
+      socket.off(SOCKET_EVENTS.ERROR, handleError);
     };
-  }, [socket]);
+  }, [socket, pushChat, showNotice]);
 
-  // 3. Media Controls (Host Only)
+  useEffect(() => () => clearTimeout(noticeTimerRef.current), []);
+
+  // 3. Host media controls — stamped with the host's server-clock time for a precise anchor
   const sendControlAction = useCallback(
-    (action, mediaTime, videoUrl = null, playbackRate = 1.0) => {
+    (action, mediaTime, playbackRate = 1.0) => {
       if (!socket || !isHost) return;
-
-      const payload = {
+      socket.emit(SOCKET_EVENTS.CONTROL_ACTION, {
         roomCode,
         action,
         mediaTime,
-        videoUrl: videoUrl || roomStateRef.current?.videoUrl,
         playbackRate,
-      };
-
-      console.log('[Room] Emitting control action:', payload);
-      socket.emit(SOCKET_EVENTS.CONTROL_ACTION, payload);
+        clientTimestamp: getServerTime(),
+      });
     },
-    [socket, isHost, roomCode]
+    [socket, isHost, roomCode, getServerTime]
   );
 
-  // 4. Periodic 3-second Heartbeat (Host Only)
   const sendHeartbeat = useCallback(
     (mediaTime, playbackState) => {
       if (!socket || !isHost || !roomCode) return;
-      socket.emit(SOCKET_EVENTS.HEARTBEAT, {
-        roomCode,
-        mediaTime,
-        playbackState,
-      });
+      socket.emit(SOCKET_EVENTS.HEARTBEAT, { roomCode, mediaTime, playbackState, clientTimestamp: getServerTime() });
     },
-    [socket, isHost, roomCode]
+    [socket, isHost, roomCode, getServerTime]
   );
 
-  // 5. Social: Chat Message Sender (SEND_MESSAGE)
+  // 4. Video switching (host)
+  const changeVideo = useCallback(
+    ({ movie, queueId, videoUrl, autoplay = true }) => {
+      if (!socket) return;
+      if (!isHost) {
+        showNotice('Only the host can change what is playing. Add it to the queue instead.', 'info');
+        return;
+      }
+      socket.emit(SOCKET_EVENTS.CHANGE_VIDEO, { roomCode, movie, queueId, videoUrl, autoplay });
+    },
+    [socket, isHost, roomCode, showNotice]
+  );
+
+  const playNow = useCallback((movie) => changeVideo({ movie }), [changeVideo]);
+  const playFromQueue = useCallback((item) => changeVideo({ queueId: item.queueId }), [changeVideo]);
+  const playNext = useCallback(() => {
+    if (queue.length > 0) changeVideo({ queueId: queue[0].queueId });
+  }, [queue, changeVideo]);
+
+  // 5. Shared queue operations (server-authoritative)
+  const emitQueue = useCallback(
+    (payload) => {
+      if (!socket || !roomCode) return;
+      socket.emit(SOCKET_EVENTS.UPDATE_QUEUE, { roomCode, ...payload });
+    },
+    [socket, roomCode]
+  );
+
+  const addToQueue = useCallback(
+    (movie) => {
+      emitQueue({ op: 'ADD', item: movie });
+      showNotice(`Added “${movie.title}” to the queue`, 'success');
+    },
+    [emitQueue, showNotice]
+  );
+  const removeFromQueue = useCallback((queueId) => emitQueue({ op: 'REMOVE', queueId }), [emitQueue]);
+  const moveQueueItem = useCallback((queueId, toIndex) => emitQueue({ op: 'MOVE', queueId, toIndex }), [emitQueue]);
+  const clearQueue = useCallback(() => emitQueue({ op: 'CLEAR' }), [emitQueue]);
+
+  // 6. Social
   const sendChatMessage = useCallback(
     (text) => {
-      if (!socket || !text.trim() || !roomCode) return;
-      const cleanText = text.trim();
-      const payload = {
-        roomCode,
-        message: cleanText,
-        username,
-      };
-      console.log('[Room] Emitting SEND_MESSAGE:', payload);
-      socket.emit(SOCKET_EVENTS.SEND_MESSAGE, payload);
+      const clean = text?.trim();
+      if (!socket || !clean || !roomCode) return;
+      socket.emit(SOCKET_EVENTS.SEND_MESSAGE, { roomCode, message: clean, username });
     },
     [socket, roomCode, username]
   );
 
-  // 6. Social: Floating Emoji Reaction Sender (EMIT_REACTION)
   const triggerReaction = useCallback(
     (emoji) => {
       if (!socket || !roomCode) return;
-      const payload = {
-        roomCode,
-        emoji,
-        username,
-      };
-      console.log('[Room] Emitting EMIT_REACTION:', payload);
-      socket.emit(SOCKET_EVENTS.EMIT_REACTION, payload);
+      socket.emit(SOCKET_EVENTS.EMIT_REACTION, { roomCode, emoji, username });
     },
     [socket, roomCode, username]
   );
 
-  // 7. Playlist Operations
-  const addToPlaylist = useCallback(
-    (movie) => {
-      const updated = [...playlist, movie];
-      setPlaylist(updated);
-      socket?.emit(SOCKET_EVENTS.PLAYLIST_UPDATE, updated);
-    },
-    [playlist, socket]
+  const value = useMemo(
+    () => ({
+      roomCode,
+      username,
+      selfId,
+      isHost,
+      isConnected,
+      connectionError,
+      isLoading,
+      isRejoining,
+      error,
+      notice,
+      showNotice,
+      roomState,
+      syncEpoch,
+      lastEvent,
+      users,
+      queue,
+      // clock
+      clockOffset: clock.clockOffset,
+      rtt: clock.rtt,
+      isSynced: clock.isSynced,
+      getServerTime,
+      // media
+      sendControlAction,
+      sendHeartbeat,
+      changeVideo,
+      playNow,
+      playFromQueue,
+      playNext,
+      // queue
+      addToQueue,
+      removeFromQueue,
+      moveQueueItem,
+      clearQueue,
+      // social
+      chatMessages,
+      sendChatMessage,
+      reactions,
+      triggerReaction,
+    }),
+    [
+      roomCode, username, selfId, isHost, isConnected, connectionError, isLoading, isRejoining, error, notice,
+      showNotice, roomState, syncEpoch, lastEvent, users, queue, clock.clockOffset, clock.rtt, clock.isSynced,
+      getServerTime, sendControlAction, sendHeartbeat, changeVideo, playNow, playFromQueue, playNext, addToQueue,
+      removeFromQueue, moveQueueItem, clearQueue, chatMessages, sendChatMessage, reactions, triggerReaction,
+    ]
   );
 
-  const removeFromPlaylist = useCallback(
-    (index) => {
-      const updated = playlist.filter((_, i) => i !== index);
-      setPlaylist(updated);
-      socket?.emit(SOCKET_EVENTS.PLAYLIST_UPDATE, updated);
-    },
-    [playlist, socket]
-  );
-
-  const playNow = useCallback(
-    (movie) => {
-      if (!isHost) return;
-      // Change video source in room state
-      setRoomState((prev) => ({
-        ...prev,
-        videoUrl: movie.videoUrl,
-        mediaTime: 0,
-        playbackState: PLAYBACK_STATE.PLAYING,
-        targetTimestamp: Date.now(),
-      }));
-      sendControlAction(CONTROL_TYPE.SEEK, 0, movie.videoUrl);
-      sendControlAction(CONTROL_TYPE.PLAY, 0, movie.videoUrl);
-    },
-    [isHost, sendControlAction]
-  );
-
-  return (
-    <RoomContext.Provider
-      value={{
-        roomCode,
-        isHost,
-        roomState,
-        setRoomState,
-        users,
-        isLoading,
-        error,
-        clockOffset,
-        rtt,
-        isSynced,
-        getServerTime,
-        sendControlAction,
-        sendHeartbeat,
-        chatMessages,
-        sendChatMessage,
-        reactions,
-        triggerReaction,
-        playlist,
-        addToPlaylist,
-        removeFromPlaylist,
-        playNow,
-      }}
-    >
-      {children}
-    </RoomContext.Provider>
-  );
+  return <RoomContext.Provider value={value}>{children}</RoomContext.Provider>;
 }
 
 export function useRoom() {
