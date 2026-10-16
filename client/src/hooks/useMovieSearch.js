@@ -6,48 +6,56 @@ import { MOCK_MOVIES } from '../data/mockMovies';
 
 const fuseOptions = {
   keys: [
-    { name: 'title', weight: 0.5 },
-    { name: 'subtitle', weight: 0.2 },
-    { name: 'genre', weight: 0.15 },
+    { name: 'title', weight: 0.45 },
+    { name: 'subtitle', weight: 0.15 },
+    { name: 'genres', weight: 0.15 },
     { name: 'director', weight: 0.1 },
-    { name: 'description', weight: 0.05 },
+    { name: 'category', weight: 0.05 },
+    { name: 'description', weight: 0.1 },
   ],
-  threshold: 0.35,
+  threshold: 0.38, // typo tolerant: "elefant", "tears of stel"
   ignoreLocation: true,
+  includeScore: true,
 };
 
-export function useMovieSearch(initialMovies = MOCK_MOVIES) {
+/**
+ * Fuzzy search (Fuse.js) + category tab + genre filter over the catalog.
+ */
+export function useMovieSearch(movies = MOCK_MOVIES) {
   const [query, setQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [selectedGenre, setSelectedGenre] = useState(null);
 
-  const fuse = useMemo(() => new Fuse(initialMovies, fuseOptions), [initialMovies]);
+  const fuse = useMemo(() => new Fuse(movies, fuseOptions), [movies]);
 
-  const filteredMovies = useMemo(() => {
-    let results = initialMovies;
+  const results = useMemo(() => {
+    const q = query.trim();
+    let list = q ? fuse.search(q).map((r) => r.item) : movies;
 
-    // Apply fuzzy search if query is non-empty
-    if (query.trim() !== '') {
-      results = fuse.search(query.trim()).map((res) => res.item);
-    }
-
-    // Apply category / genre filter
     if (selectedCategory !== 'All') {
-      results = results.filter(
-        (m) =>
-          m.genre.toLowerCase() === selectedCategory.toLowerCase() ||
-          m.category.toLowerCase() === selectedCategory.toLowerCase()
-      );
+      list = list.filter((m) => m.category === selectedCategory);
     }
+    if (selectedGenre) {
+      list = list.filter((m) => (m.genres || [m.genre]).includes(selectedGenre));
+    }
+    return list;
+  }, [query, selectedCategory, selectedGenre, movies, fuse]);
 
-    return results;
-  }, [query, selectedCategory, initialMovies, fuse]);
+  const reset = () => {
+    setQuery('');
+    setSelectedCategory('All');
+    setSelectedGenre(null);
+  };
 
   return {
     query,
     setQuery,
     selectedCategory,
     setSelectedCategory,
-    movies: filteredMovies,
-    totalCount: filteredMovies.length,
+    selectedGenre,
+    setSelectedGenre,
+    movies: results,
+    totalCount: results.length,
+    reset,
   };
 }

@@ -1,18 +1,37 @@
 import { EVENTS } from '../../constants/events.js';
-import { RoomService } from '../../services/roomService.js';
+import { RoomService, sanitizeRoomCode } from '../../services/roomService.js';
+import { replyError } from '../socketUtils.js';
 
 export function registerRoomHandler(io, socket) {
   socket.on(EVENTS.JOIN_ROOM, async (payload = {}, callback) => {
     try {
-      let { roomCode, username } = payload;
+      let roomCode = sanitizeRoomCode(payload.roomCode);
+      const { username } = payload;
 
       // If no room code provided, generate a new one
-      if (!roomCode || typeof roomCode !== 'string' || roomCode.trim() === '') {
+      if (!roomCode) {
         roomCode = await RoomService.generateUniqueRoomCode();
       }
 
-      roomCode = roomCode.trim().toUpperCase();
-      const sanitizedUsername = username && typeof username === 'string' ? username.trim() : 'Anonymous';
+      const sanitizedUsername =
+        username && typeof username === 'string' && username.trim() ? username.trim().slice(0, 32) : 'Anonymous';
+
+      // A socket belongs to one room at a time: leave any previous room first
+      const previous = await RoomService.getSocketSession(socket.id);
+      if (previous?.roomCode && previous.roomCode !== roomCode) {
+        const left = await RoomService.handleDisconnect(socket.id);
+        socket.leave(previous.roomCode);
+        socket.leave(`room:${previous.roomCode}`);
+        if (left) {
+          io.to(`room:${left.roomCode}`).emit(EVENTS.USER_LEFT, {
+            socketId: socket.id,
+            username: left.username,
+            totalUsers: left.remainingCount,
+            users: left.users,
+          });
+          if (left.hostChanged) io.to(`room:${left.roomCode}`).emit(EVENTS.HOST_CHANGED, left.hostChanged);
+        }
+      }
 
       const result = await RoomService.addUserToRoom(roomCode, socket.id, sanitizedUsername);
       const roomChannel = `room:${roomCode}`;
@@ -21,12 +40,20 @@ export function registerRoomHandler(io, socket) {
       socket.join(roomChannel);
       socket.join(roomCode);
 
+      // Late-joiner snapshot: media anchor + expected position now, queue, participants, chat
+      const snapshot = await RoomService.getRoomSnapshot(roomCode);
+
       const response = {
         success: true,
         roomCode,
+        selfSocketId: socket.id,
         isHost: result.isHost,
-        roomState: result.room,
-        users: result.users,
+        roomState: snapshot.roomState,
+        queue: snapshot.queue,
+        users: snapshot.users,
+        messages: snapshot.messages,
+        serverTimestamp: snapshot.serverTimestamp,
+        currentMediaTime: snapshot.currentMediaTime,
       };
 
       // Notify caller
@@ -40,20 +67,14 @@ export function registerRoomHandler(io, socket) {
         socketId: socket.id,
         username: sanitizedUsername,
         joinedAt: result.joinedAt,
-        totalUsers: result.users.length,
+        isHost: result.isHost,
+        totalUsers: snapshot.users.length,
+        users: snapshot.users,
       });
 
       console.log(`[Room] Socket ${socket.id} (${sanitizedUsername}) joined room ${roomCode}. Host: ${result.isHost}`);
     } catch (err) {
-      console.error('[Room] JOIN_ROOM error:', err.message);
-      const errorResponse = {
-        success: false,
-        message: err.message || 'Failed to join room',
-      };
-      socket.emit(EVENTS.ERROR, errorResponse);
-      if (typeof callback === 'function') {
-        callback(errorResponse);
-      }
+      replyError(socket, callback, err, 'JOIN_ROOM');
     }
   });
 }

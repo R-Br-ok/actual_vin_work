@@ -6,16 +6,13 @@ Synchronized real-time cinema frontend crafted with **Next.js 14 (App Router)**,
 
 ## Visual Design System (FRAME)
 
-Mirrored directly from the reference UI design tokens located in `server/src/reference-ui/`:
-- **Color Palette**:
-  - `--ink`: `#080a0a` (Obsidian background)
-  - `--panel`: `#0e1111` (Cinema card background)
-  - `--panel-soft`: `#141818`
-  - `--line`: `#2a3030` (Subtle borders)
-  - `--text`: `#f2f3ef` (High-contrast typography)
-  - `--muted`: `#8f9692`
-  - `--accent`: `#ff7657` (Coral/orange interactive accent)
-  - `--secondary`: `#82aef5` (Blue match score pill)
+Layout mirrors the reference UI in `server/src/reference-ui/`, re-themed for the cinema look:
+- **Color Palette** (cinema dark, RGB-channel tokens in `globals.css` so Tailwind `/opacity` works):
+  - `--ink`: `#0B0F19` (background)
+  - `--panel`: `#111827` (surface)
+  - `--accent`: `#6366F1` (indigo primary), `--accent-soft`: `#818CF8`
+  - `--secondary`: `#38BDF8` (telemetry / info)
+  - Glassmorphism utilities: `.glass`, `.glass-overlay`
 - **Typography**:
   - Headings: `Gabriela`, Georgia, serif
   - Body & UI: `Plus Jakarta Sans`, sans-serif
@@ -69,6 +66,8 @@ client/
     │   ├── useDriftCorrection.js       # 3-second periodic drift correction loop
     │   └── useMovieSearch.js           # Fuse.js fuzzy search engine
     ├── lib/
+    │   ├── socket.js                   # Socket.io singleton + server URL (same host, port 5000)
+    │   ├── identity.js                 # Display name persistence
     │   ├── constants.js                # Socket events, thresholds, and playback states
     │   └── utils.js                    # Time formatting, clipboard helpers, avatar colors
     └── data/
@@ -117,10 +116,12 @@ npm start
 ### 2. Run the Frontend Development Server
 ```bash
 cd client
-npm run dev
+npm run dev   # next dev -H 0.0.0.0 -p 3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:3000](http://localhost:3000), or `http://<your-LAN-IP>:3000` from another device.
+The client connects to the sync server on the **same host it was opened from**, port 5000
+(override with `NEXT_PUBLIC_SOCKET_URL=http://host:5000`).
 
 ### 3. Production Build
 ```bash

@@ -9,8 +9,8 @@ const router = Router();
  */
 router.post('/rooms', async (req, res) => {
   try {
-    const { videoUrl, roomCode } = req.body || {};
-    const room = await RoomService.createRoom({ roomCode, videoUrl });
+    const { videoUrl, roomCode, movie } = req.body || {};
+    const room = await RoomService.createRoom({ roomCode, videoUrl, movie });
 
     res.status(201).json({
       success: true,

@@ -41,7 +41,10 @@ server/
     │       ├── clockHandler.js        # NTP-style 3-way clock synchronization (SYNC_CLOCK)
     │       ├── roomHandler.js         # JOIN_ROOM handler
     │       ├── controlHandler.js     # CONTROL_ACTION handler
-    │       ├── heartbeatHandler.js    # HEARTBEAT handler
+    │       ├── heartbeatHandler.js    # HEARTBEAT handler (+ STATE_SYNC relay)
+    │       ├── videoHandler.js        # CHANGE_VIDEO -> VIDEO_CHANGED
+    │       ├── queueHandler.js        # UPDATE_QUEUE -> QUEUE_UPDATED
+    │       ├── socialHandler.js       # SEND_MESSAGE / EMIT_REACTION
     │       └── disconnectHandler.js   # DISCONNECT & host election handler
     └── routes/
         ├── healthRoutes.js            # GET /health
@@ -56,6 +59,7 @@ Configure these in `.env`:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
+| `HOST` | `0.0.0.0` | Bind address (0.0.0.0 = reachable from other devices on the LAN) |
 | `PORT` | `5000` | Port for Express & Socket.io |
 | `NODE_ENV` | `development` | App environment (`development` / `production`) |
 | `REDIS_HOST` | `127.0.0.1` | Redis host address |
@@ -75,8 +79,8 @@ cd server
 npm install
 ```
 
-### 2. Run Redis
-Ensure Redis is running locally or in Docker:
+### 2. Run Redis (optional)
+Without Redis the server falls back to an in-memory store automatically. To use Redis:
 ```bash
 redis-server
 # Or using Docker:
@@ -90,7 +94,13 @@ npm start
 
 # Development mode (auto-reload on change):
 npm run dev
+
+# Tests (logic, in-memory CRUD, broadcast, video/queue/late-join):
+npm test
 ```
+
+The server listens on `0.0.0.0:5000` and prints its LAN address on boot, so phones and other
+laptops on the same network can join via `http://<that-ip>:3000`.
 
 ---
 
@@ -251,3 +261,37 @@ Response:
     "totalUsers": 1
   }
   ```
+
+### 6. `CHANGE_VIDEO` (Host Only)
+- **Client Emits:** `{ "movie": { ...catalog entry } }` or `{ "queueId": "abc123" }` (plays & removes that queue entry) or `{ "videoUrl": "https://…/x.mp4" }`, plus optional `"autoplay": true`
+- **Server Broadcasts to Room (`VIDEO_CHANGED`):**
+  ```json
+  {
+    "videoUrl": "https://…/TearsOfSteel.mp4",
+    "movie": { "id": "tears-of-steel", "title": "Tears of Steel", "...": "..." },
+    "mediaTime": 0,
+    "playbackState": "PAUSED",
+    "targetTimestamp": 1729040000000,
+    "autoplay": true,
+    "issuedBy": "soc_123"
+  }
+  ```
+  Every client swaps its `<video>` source and resets to 0. The room stays `PAUSED` until the host's
+  player can actually play, then the host emits `PLAY` — nobody starts before the stream is ready.
+
+### 7. `UPDATE_QUEUE` → `QUEUE_UPDATED`
+- Clients send **operations**, not arrays, and the server applies them under a per-room lock:
+  | op | payload | who |
+  | :-- | :-- | :-- |
+  | `ADD` | `{ item }` | anyone |
+  | `REMOVE` | `{ queueId }` | host, or whoever added it |
+  | `MOVE` | `{ queueId, toIndex }` | host |
+  | `CLEAR` | `{}` | host |
+  | `SET` | `{ queue }` | host |
+- The authoritative array is broadcast as `QUEUE_UPDATED { queue, op, updatedBy }`, so every participant holds the identical queue.
+
+### 8. `STATE_SYNC` (server → viewers)
+Each host `HEARTBEAT` re-anchors `{ mediaTime, targetTimestamp }` (stamped with the host's server-clock time) and is relayed to viewers, keeping them on the host's real position even if the host's stream buffered.
+
+### 9. Late joiners (`JOIN_ROOM` → `ROOM_JOINED`)
+`ROOM_JOINED` carries the full snapshot: `roomState` (video, current movie, anchor, host), `currentMediaTime` (expected position right now), `serverTimestamp`, `queue`, `users` and the last 50 chat `messages`.

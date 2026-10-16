@@ -1,51 +1,49 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { io } from 'socket.io-client';
+import { getSocket } from '../lib/socket';
 
 const SocketContext = createContext({
   socket: null,
   isConnected: false,
+  connectionError: null,
 });
 
 export function SocketProvider({ children }) {
   const [socket, setSocket] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [connectionError, setConnectionError] = useState(null);
 
   useEffect(() => {
-    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:5000';
-    console.log(`[Socket] Initializing connection to ${socketUrl}...`);
+    const instance = getSocket();
+    if (!instance) return;
+    setSocket(instance);
+    setIsConnected(instance.connected);
 
-    const socketInstance = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-    });
-
-    socketInstance.on('connect', () => {
-      console.log(`[Socket] Connected with ID: ${socketInstance.id}`);
+    const onConnect = () => {
       setIsConnected(true);
-    });
-
-    socketInstance.on('disconnect', (reason) => {
-      console.warn(`[Socket] Disconnected: ${reason}`);
+      setConnectionError(null);
+    };
+    const onDisconnect = () => setIsConnected(false);
+    const onConnectError = (err) => {
       setIsConnected(false);
-    });
+      setConnectionError(err?.message || 'Unable to reach the sync server');
+    };
 
-    socketInstance.on('connect_error', (err) => {
-      console.error('[Socket] Connection Error:', err.message);
-      setIsConnected(false);
-    });
+    instance.on('connect', onConnect);
+    instance.on('disconnect', onDisconnect);
+    instance.on('connect_error', onConnectError);
 
-    setSocket(socketInstance);
-
+    // Listeners only — the singleton connection outlives this provider's effects.
     return () => {
-      socketInstance.disconnect();
+      instance.off('connect', onConnect);
+      instance.off('disconnect', onDisconnect);
+      instance.off('connect_error', onConnectError);
     };
   }, []);
 
   return (
-    <SocketContext.Provider value={{ socket, isConnected }}>
+    <SocketContext.Provider value={{ socket, isConnected, connectionError }}>
       {children}
     </SocketContext.Provider>
   );
