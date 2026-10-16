@@ -19,12 +19,13 @@ export function registerControlHandler(io, socket) {
       }
 
       const parsedMediaTime = parseFloat(mediaTime ?? 0);
-      const parsedRate = parseFloat(playbackRate ?? 1.0);
+      // Omitted rate = keep the room's current base speed
+      const parsedRate = playbackRate === undefined || playbackRate === null ? undefined : parseFloat(playbackRate);
 
       const controlResult = await RoomService.handleControlAction(roomCode, socket.id, {
         action: action.toUpperCase(),
         mediaTime: Number.isFinite(parsedMediaTime) ? parsedMediaTime : 0,
-        playbackRate: Number.isFinite(parsedRate) ? parsedRate : 1.0,
+        playbackRate: Number.isFinite(parsedRate) ? parsedRate : undefined,
         videoUrl,
         clientTimestamp,
       });

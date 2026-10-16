@@ -22,11 +22,15 @@ let socketSingleton = null;
  * One Socket.io connection per browser tab, shared by every component.
  * Living at module scope means React StrictMode's double-mounted effects and
  * client-side navigations never open a second connection.
+ *
+ * Created with autoConnect: false — the room page validates the room code over REST first
+ * and only then calls socket.connect() (see RoomProvider).
  */
 export function getSocket() {
   if (typeof window === 'undefined') return null;
   if (!socketSingleton) {
     socketSingleton = io(getServerUrl(), {
+      autoConnect: false,
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -36,4 +40,27 @@ export function getSocket() {
     });
   }
   return socketSingleton;
+}
+
+/**
+ * GET /api/rooms/:code — does this room exist?
+ * Resolves to { status: 'ok', room } | { status: 'not_found' } | { status: 'unreachable' }.
+ */
+export async function validateRoom(code, { timeoutMs = 6000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${getServerUrl()}/api/rooms/${encodeURIComponent(code)}`, {
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    if (res.status === 404) return { status: 'not_found' };
+    if (!res.ok) return { status: 'unreachable' };
+    const body = await res.json();
+    return body?.success ? { status: 'ok', room: body.room } : { status: 'not_found' };
+  } catch {
+    return { status: 'unreachable' };
+  } finally {
+    clearTimeout(timer);
+  }
 }

@@ -9,8 +9,9 @@ import { VideoSyncPlayer } from '../../../components/player/VideoSyncPlayer';
 import { ChatBox } from '../../../components/social/ChatBox';
 import { PlaylistQueue } from '../../../components/social/PlaylistQueue';
 import { MovieDiscoveryModal } from '../../../components/discovery/MovieDiscoveryModal';
+import { RoomNotFound, ServerUnreachable } from '../../../components/room/RoomNotFound';
 import { getOrCreateUsername } from '../../../lib/identity';
-import { getServerUrl } from '../../../lib/socket';
+import { getServerUrl, validateRoom } from '../../../lib/socket';
 import { cn } from '../../../lib/utils';
 
 function FullscreenMessage({ children }) {
@@ -68,11 +69,15 @@ function RoomContent() {
   }, [activeTab, chatCount]);
   const unread = activeTab === 'chat' ? 0 : Math.max(0, chatCount - seenChatCount);
 
+  if (error?.kind === 'not_found') {
+    return <RoomNotFound roomCode={roomCode} />;
+  }
+
   if (error) {
     return (
       <FullscreenMessage>
         <h2 className="font-serif text-2xl text-rose-300">Couldn’t join room {roomCode}</h2>
-        <p className="max-w-md text-sm text-muted">{error}</p>
+        <p className="max-w-md text-sm text-muted">{error.message}</p>
         <Link href="/" className="btn-primary">
           Back to home
         </Link>
@@ -166,20 +171,53 @@ function RoomContent() {
 /**
  * Next.js 14: `params` is a plain object for client pages — read params.code directly
  * (React's use(params) is only needed from Next 15 onwards).
+ *
+ * Flow: validate the code over REST (GET /api/rooms/:code) → only if it exists mount the
+ * RoomProvider, which opens the socket and emits JOIN_ROOM. Unknown codes never connect.
  */
 export default function RoomPage({ params }) {
-  const code = decodeURIComponent(params.code || '').toUpperCase();
+  const code = decodeURIComponent(params.code || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 12);
   // Read the stored display name after mount so server and client markup match
   const [username, setUsername] = useState(null);
+  // 'checking' | 'ok' | 'not_found' | 'unreachable'
+  const [validation, setValidation] = useState('checking');
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     setUsername(getOrCreateUsername());
   }, []);
 
-  if (!username) {
+  useEffect(() => {
+    if (!code) {
+      setValidation('not_found');
+      return undefined;
+    }
+    let cancelled = false;
+    setValidation('checking');
+    validateRoom(code).then((result) => {
+      if (!cancelled) setValidation(result.status);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [code, attempt]);
+
+  if (validation === 'not_found') {
+    return <RoomNotFound roomCode={code} />;
+  }
+
+  if (validation === 'unreachable') {
+    return <ServerUnreachable serverUrl={getServerUrl()} onRetry={() => setAttempt((n) => n + 1)} />;
+  }
+
+  if (validation === 'checking' || !username) {
     return (
       <FullscreenMessage>
         <Loader2 size={32} className="animate-spin text-accent" />
+        <p className="text-xs text-muted">Looking up room {code}…</p>
       </FullscreenMessage>
     );
   }

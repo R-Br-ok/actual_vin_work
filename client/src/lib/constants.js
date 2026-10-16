@@ -8,10 +8,15 @@ export const SOCKET_EVENTS = {
   ROOM_JOINED: 'ROOM_JOINED',
   USER_JOINED: 'USER_JOINED',
   USER_LEFT: 'USER_LEFT',
+  ROOM_ERROR: 'ROOM_ERROR',
 
   // Media controls
   CONTROL_ACTION: 'CONTROL_ACTION',
   CONTROL_ACTION_BROADCAST: 'CONTROL_ACTION_BROADCAST',
+
+  // Playback speed (host only)
+  CHANGE_PLAYBACK_RATE: 'CHANGE_PLAYBACK_RATE',
+  PLAYBACK_RATE_CHANGED: 'PLAYBACK_RATE_CHANGED',
 
   // Video source switching
   CHANGE_VIDEO: 'CHANGE_VIDEO',
@@ -67,3 +72,6 @@ export const CLOCK_SYNC = {
 export const HEARTBEAT_INTERVAL_MS = 3000;
 
 export const REACTION_EMOJIS = ['🔥', '❤️', '😂', '😮', '👏', '🍿', '😱', '🎉'];
+
+/** Speeds offered in the player's speed menu (must match the server's allowed set). */
+export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];

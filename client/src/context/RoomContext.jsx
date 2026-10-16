@@ -8,8 +8,7 @@ import { SOCKET_EVENTS } from '../lib/constants';
 const RoomContext = createContext(null);
 
 const MAX_CHAT_MESSAGES = 200;
-const MAX_LIVE_REACTIONS = 40;
-const REACTION_LIFETIME_MS = 3200;
+const ROOM_NOT_FOUND = 'ROOM_NOT_FOUND';
 
 function systemMessage(text) {
   return {
@@ -50,6 +49,8 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
 
   const [roomCode, setRoomCode] = useState(initialRoomCode?.toUpperCase() || '');
   const [selfId, setSelfId] = useState(null);
+  // Name the server assigned (may carry a " 2" suffix if someone in the room already uses ours)
+  const [displayName, setDisplayName] = useState(username);
   const [roomState, setRoomState] = useState(null);
   // Bumped whenever playback must be re-aligned immediately (join, control action, video change).
   // STATE_SYNC heartbeats update the anchor silently and leave correction to the 3s drift loop.
@@ -58,9 +59,9 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
   const [users, setUsers] = useState([]);
   const [queue, setQueue] = useState([]);
   const [chatMessages, setChatMessages] = useState([]);
-  const [reactions, setReactions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRejoining, setIsRejoining] = useState(false);
+  // { kind: 'not_found' | 'join_failed', message }
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
 
@@ -85,6 +86,27 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
     });
   }, []);
 
+  // 0. The page validated the room over REST before mounting us — only now open the socket.
+  //    Leaving the room page disconnects, so the server drops us from the participant list.
+  useEffect(() => {
+    if (!socket) return undefined;
+    if (!socket.connected) socket.connect();
+    return () => {
+      socket.disconnect();
+    };
+  }, [socket]);
+
+  const failRoomNotFound = useCallback(
+    (message) => {
+      setError({ kind: 'not_found', message: message || 'Room does not exist or has expired' });
+      setIsLoading(false);
+      setIsRejoining(false);
+      // Stop reconnect → rejoin → reject loops for a room that is gone
+      socket?.disconnect();
+    },
+    [socket]
+  );
+
   // 1. Join (and transparently re-join after reconnects) — consumes the late-join snapshot
   useEffect(() => {
     if (!socket || !isConnected || !roomCode) return;
@@ -94,9 +116,13 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
 
     socket.timeout(8000).emit(SOCKET_EVENTS.JOIN_ROOM, { roomCode, username }, (err, response) => {
       setIsRejoining(false);
+      if (!err && response?.code === ROOM_NOT_FOUND) {
+        failRoomNotFound(response.message);
+        return;
+      }
       if (err || !response?.success) {
         const message = err ? 'The sync server did not answer in time.' : response?.message || 'Failed to join room';
-        if (!hasJoinedRef.current) setError(message);
+        if (!hasJoinedRef.current) setError({ kind: 'join_failed', message });
         else showNotice(message);
         setIsLoading(false);
         return;
@@ -106,6 +132,7 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       hasJoinedRef.current = true;
 
       setSelfId(response.selfSocketId || socket.id);
+      if (response.username) setDisplayName(response.username);
       setRoomCode(response.roomCode);
       setRoomState(response.roomState);
       setUsers(response.users || []);
@@ -127,7 +154,7 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       setError(null);
       setIsLoading(false);
     });
-  }, [socket, isConnected, roomCode, username, showNotice]);
+  }, [socket, isConnected, roomCode, username, showNotice, failRoomNotFound]);
 
   // 2. Real-time listeners
   useEffect(() => {
@@ -168,6 +195,14 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       setSyncEpoch((n) => n + 1);
     };
 
+    const handlePlaybackRateChanged = (payload) => {
+      const rate = Number(payload.basePlaybackRate ?? payload.rate) || 1;
+      setRoomState((prev) => (prev ? { ...prev, ...anchorFrom(payload), playbackRate: rate } : prev));
+      setLastEvent({ type: 'RATE', rate, issuedBy: payload.issuedBy });
+      setSyncEpoch((n) => n + 1);
+      pushChat(systemMessage(`Playback speed set to ${rate}×`));
+    };
+
     const handleVideoChanged = (payload) => {
       setRoomState((prev) => ({
         ...(prev || {}),
@@ -196,18 +231,9 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
 
     const handleNewMessage = (msg) => pushChat(normalizeMessage(msg));
 
-    const handleReaction = (reaction) => {
-      const formatted = {
-        id: reaction.id || `react-${Date.now()}-${Math.random()}`,
-        emoji: reaction.emoji,
-        sender: reaction.username || reaction.sender || 'Anonymous',
-        x: reaction.x ?? Math.random() * 80 + 10,
-        drift: (Math.random() - 0.5) * 60,
-        scale: 0.85 + Math.random() * 0.5,
-      };
-      setReactions((prev) => [...prev.slice(-(MAX_LIVE_REACTIONS - 1)), formatted]);
-      setTimeout(() => setReactions((prev) => prev.filter((r) => r.id !== formatted.id)), REACTION_LIFETIME_MS);
-    };
+    // Emoji reactions are consumed directly by <ReactionCanvas /> (REACTION_BROADCAST).
+
+    const handleRoomError = (payload) => failRoomNotFound(payload?.message);
 
     const handleError = (payload) => {
       if (payload?.message) showNotice(payload.message);
@@ -218,10 +244,11 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
     socket.on(SOCKET_EVENTS.HOST_CHANGED, handleHostChanged);
     socket.on(SOCKET_EVENTS.CONTROL_ACTION_BROADCAST, handleControlBroadcast);
     socket.on(SOCKET_EVENTS.VIDEO_CHANGED, handleVideoChanged);
+    socket.on(SOCKET_EVENTS.PLAYBACK_RATE_CHANGED, handlePlaybackRateChanged);
     socket.on(SOCKET_EVENTS.STATE_SYNC, handleStateSync);
     socket.on(SOCKET_EVENTS.QUEUE_UPDATED, handleQueueUpdated);
     socket.on(SOCKET_EVENTS.NEW_MESSAGE, handleNewMessage);
-    socket.on(SOCKET_EVENTS.REACTION_BROADCAST, handleReaction);
+    socket.on(SOCKET_EVENTS.ROOM_ERROR, handleRoomError);
     socket.on(SOCKET_EVENTS.ERROR, handleError);
 
     return () => {
@@ -230,29 +257,43 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       socket.off(SOCKET_EVENTS.HOST_CHANGED, handleHostChanged);
       socket.off(SOCKET_EVENTS.CONTROL_ACTION_BROADCAST, handleControlBroadcast);
       socket.off(SOCKET_EVENTS.VIDEO_CHANGED, handleVideoChanged);
+      socket.off(SOCKET_EVENTS.PLAYBACK_RATE_CHANGED, handlePlaybackRateChanged);
       socket.off(SOCKET_EVENTS.STATE_SYNC, handleStateSync);
       socket.off(SOCKET_EVENTS.QUEUE_UPDATED, handleQueueUpdated);
       socket.off(SOCKET_EVENTS.NEW_MESSAGE, handleNewMessage);
-      socket.off(SOCKET_EVENTS.REACTION_BROADCAST, handleReaction);
+      socket.off(SOCKET_EVENTS.ROOM_ERROR, handleRoomError);
       socket.off(SOCKET_EVENTS.ERROR, handleError);
     };
-  }, [socket, pushChat, showNotice]);
+  }, [socket, pushChat, showNotice, failRoomNotFound]);
 
   useEffect(() => () => clearTimeout(noticeTimerRef.current), []);
 
-  // 3. Host media controls — stamped with the host's server-clock time for a precise anchor
+  // 3. Host media controls — stamped with the host's server-clock time for a precise anchor.
+  //    No playbackRate here: the room keeps its base speed (see changePlaybackRate).
   const sendControlAction = useCallback(
-    (action, mediaTime, playbackRate = 1.0) => {
+    (action, mediaTime) => {
       if (!socket || !isHost) return;
       socket.emit(SOCKET_EVENTS.CONTROL_ACTION, {
         roomCode,
         action,
         mediaTime,
-        playbackRate,
         clientTimestamp: getServerTime(),
       });
     },
     [socket, isHost, roomCode, getServerTime]
+  );
+
+  // Host: change the room's base playback speed (0.5×–2×). mediaTime = host player position now.
+  const changePlaybackRate = useCallback(
+    (rate, mediaTime) => {
+      if (!socket) return;
+      if (!isHost) {
+        showNotice('Only the host can change the playback speed.', 'info');
+        return;
+      }
+      socket.emit(SOCKET_EVENTS.CHANGE_PLAYBACK_RATE, { roomCode, rate, mediaTime, clientTimestamp: getServerTime() });
+    },
+    [socket, isHost, roomCode, getServerTime, showNotice]
   );
 
   const sendHeartbeat = useCallback(
@@ -312,18 +353,22 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
     [socket, roomCode, username]
   );
 
+  // The server echoes every reaction to the whole room (sender included) as REACTION_BROADCAST,
+  // so nothing is drawn locally here — the canvas renders what comes back.
   const triggerReaction = useCallback(
     (emoji) => {
-      if (!socket || !roomCode) return;
-      socket.emit(SOCKET_EVENTS.EMIT_REACTION, { roomCode, emoji, username });
+      if (!socket || !roomCode || !socket.connected) return;
+      socket.emit(SOCKET_EVENTS.EMIT_REACTION, { roomCode, emoji, username }, (res) => {
+        if (res && res.success === false && res.message) showNotice(res.message, 'info');
+      });
     },
-    [socket, roomCode, username]
+    [socket, roomCode, username, showNotice]
   );
 
   const value = useMemo(
     () => ({
       roomCode,
-      username,
+      username: displayName,
       selfId,
       isHost,
       isConnected,
@@ -345,6 +390,7 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       getServerTime,
       // media
       sendControlAction,
+      changePlaybackRate,
       sendHeartbeat,
       changeVideo,
       playNow,
@@ -358,14 +404,13 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       // social
       chatMessages,
       sendChatMessage,
-      reactions,
       triggerReaction,
     }),
     [
-      roomCode, username, selfId, isHost, isConnected, connectionError, isLoading, isRejoining, error, notice,
+      roomCode, displayName, selfId, isHost, isConnected, connectionError, isLoading, isRejoining, error, notice,
       showNotice, roomState, syncEpoch, lastEvent, users, queue, clock.clockOffset, clock.rtt, clock.isSynced,
-      getServerTime, sendControlAction, sendHeartbeat, changeVideo, playNow, playFromQueue, playNext, addToQueue,
-      removeFromQueue, moveQueueItem, clearQueue, chatMessages, sendChatMessage, reactions, triggerReaction,
+      getServerTime, sendControlAction, changePlaybackRate, sendHeartbeat, changeVideo, playNow, playFromQueue, playNext, addToQueue,
+      removeFromQueue, moveQueueItem, clearQueue, chatMessages, sendChatMessage, triggerReaction,
     ]
   );
 
