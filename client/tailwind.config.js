@@ -39,6 +39,8 @@ module.exports = {
         'fade-in': 'fadeIn 0.25s ease-out forwards',
         'slide-up': 'slideUp 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards',
         'reaction-float': 'reactionFloat 3.2s cubic-bezier(0.22, 0.61, 0.36, 1) forwards',
+        'hero-progress': 'heroProgress 6s linear forwards',
+        'ken-burns': 'kenBurns 9s ease-out forwards',
       },
       keyframes: {
         fadeIn: {
@@ -48,6 +50,14 @@ module.exports = {
         slideUp: {
           '0%': { opacity: '0', transform: 'translateY(12px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        heroProgress: {
+          '0%': { transform: 'scaleX(0)' },
+          '100%': { transform: 'scaleX(1)' },
+        },
+        kenBurns: {
+          '0%': { transform: 'scale(1.12)' },
+          '100%': { transform: 'scale(1.02)' },
         },
         reactionFloat: {
           '0%': { opacity: '0', transform: 'translate(-50%, 0) scale(calc(var(--scale, 1) * 0.4))' },

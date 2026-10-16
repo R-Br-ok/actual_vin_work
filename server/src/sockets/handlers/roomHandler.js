@@ -47,6 +47,7 @@ export function registerRoomHandler(io, socket) {
 
       // Re-checked under the room lock — throws RoomNotFoundError if it expired meanwhile
       const result = await RoomService.addUserToRoom(roomCode, socket.id, sanitizedUsername);
+      const assignedName = result.username; // de-duplicated within the room
       const roomChannel = `room:${roomCode}`;
 
       // 2. Only now join the socket.io channels (support both direct code and room:code)
@@ -60,6 +61,7 @@ export function registerRoomHandler(io, socket) {
         success: true,
         roomCode,
         selfSocketId: socket.id,
+        username: assignedName,
         isHost: result.isHost,
         roomState: snapshot.roomState,
         queue: snapshot.queue,
@@ -78,14 +80,14 @@ export function registerRoomHandler(io, socket) {
       // Notify other participants in the room
       socket.to(roomChannel).emit(EVENTS.USER_JOINED, {
         socketId: socket.id,
-        username: sanitizedUsername,
+        username: assignedName,
         joinedAt: result.joinedAt,
         isHost: result.isHost,
         totalUsers: snapshot.users.length,
         users: snapshot.users,
       });
 
-      console.log(`[Room] Socket ${socket.id} (${sanitizedUsername}) joined room ${roomCode}. Host: ${result.isHost}`);
+      console.log(`[Room] Socket ${socket.id} (${assignedName}) joined room ${roomCode}. Host: ${result.isHost}`);
     } catch (err) {
       if (err?.code === ROOM_NOT_FOUND) {
         rejectUnknownRoom(socket, callback, roomCode);

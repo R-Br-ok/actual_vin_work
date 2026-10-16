@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, RotateCcw, RotateCw, SkipForward, Radio } from 'lucide-react';
 import { formatTime, cn } from '../../lib/utils';
+import { SpeedMenu } from './SpeedMenu';
 
 export function PlayerControls({
   isPlaying,
@@ -21,6 +22,8 @@ export function PlayerControls({
   onVolumeChange,
   onToggleMute,
   onToggleFullscreen,
+  playbackRate = 1,
+  onRateChange,
 }) {
   // While dragging the scrubber we preview locally and only commit (emit SEEK) on release
   const [scrubValue, setScrubValue] = useState(null);
@@ -107,6 +110,7 @@ export function PlayerControls({
         </div>
 
         <div className="flex items-center gap-1">
+          <SpeedMenu rate={playbackRate} isHost={isHost} onChange={onRateChange} />
           <div className="group/vol flex items-center">
             <button type="button" onClick={onToggleMute} className="icon-btn" aria-label={isMuted ? 'Unmute' : 'Mute'}>
               {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}

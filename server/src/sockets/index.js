@@ -9,6 +9,7 @@ import { registerSocialHandler } from './handlers/socialHandler.js';
 import { registerVideoHandler } from './handlers/videoHandler.js';
 import { registerQueueHandler } from './handlers/queueHandler.js';
 import { registerReactionHandler } from './handlers/reactionHandler.js';
+import { registerPlaybackRateHandler } from './handlers/playbackRateHandler.js';
 
 export function initializeSockets(httpServer) {
   const io = new Server(httpServer, {
@@ -33,6 +34,7 @@ export function initializeSockets(httpServer) {
     registerVideoHandler(io, socket);
     registerQueueHandler(io, socket);
     registerReactionHandler(io, socket);
+    registerPlaybackRateHandler(io, socket);
   });
 
   return io;

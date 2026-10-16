@@ -11,7 +11,7 @@ const MAX_EMOJI_LENGTH = 16;
  * Broadcast with io.to(roomCode) — NOT socket.to() — so the whole room gets it:
  * the sender sees their own emoji float up, and the host sees viewers' reactions (and vice versa).
  *
- * Payload: { id, emoji, senderId, senderName, timestamp, roomCode, x }
+ * Payload: { id: Date.now() + Math.random(), emoji, senderId, senderName, timestamp: Date.now(), roomCode, x }
  */
 export function registerReactionHandler(io, socket) {
   // Per-socket throttle so one person can't flood everyone's overlay
@@ -49,7 +49,7 @@ export function registerReactionHandler(io, socket) {
       const senderName = hasSession ? username : payload.username?.trim()?.slice(0, 32) || 'Anonymous';
 
       const reaction = {
-        id: `react-${now}-${Math.random().toString(36).substring(2, 7)}`,
+        id: Date.now() + Math.random(), // unique per broadcast; used as the particle key
         emoji,
         senderId: socket.id,
         senderName,

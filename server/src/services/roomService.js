@@ -7,15 +7,21 @@ import { PLAYBACK_STATE, CONTROL_TYPE } from '../constants/playback.js';
 const generateCode = customAlphabet('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', ENV.ROOM_CODE_LENGTH);
 const generateQueueId = customAlphabet('abcdefghijkmnpqrstuvwxyz23456789', 10);
 
-// Default open-access CORS-enabled public test stream
-export const DEFAULT_VIDEO_URL = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+// Default stream: a local file served by the Next.js client from client/public/
+// (same-origin path, so it plays offline and on any LAN).
+export const DEFAULT_VIDEO_URL = '/sample.mp4';
 
 export const DEFAULT_MOVIE = {
-  id: 'big-buck-bunny',
-  title: 'Big Buck Bunny',
-  meta: '2008 · 10m',
+  id: 'hillside-pups',
+  title: 'Hillside Pups',
+  meta: 'Local · 0:32',
+  genre: 'Animals',
+  image: '/posters/sample.jpg',
   videoUrl: DEFAULT_VIDEO_URL,
 };
+
+/** Playback speeds the host may pick (CHANGE_PLAYBACK_RATE). */
+export const ALLOWED_PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 const MAX_QUEUE_LENGTH = 50;
 const MAX_CHAT_HISTORY = 50;
@@ -273,6 +279,14 @@ export class RoomService {
 
       const isHost = room.hostSocketId === socketId;
 
+      // Names are unique within a room: "Priya" joining twice becomes "Priya 2"
+      const others = (await this.getActiveUsers(code)).filter((u) => u.socketId !== socketId);
+      const taken = new Set(others.map((u) => u.username.toLowerCase()));
+      const base = username.slice(0, 29);
+      let uniqueName = username;
+      for (let n = 2; taken.has(uniqueName.toLowerCase()); n++) uniqueName = `${base} ${n}`;
+      username = uniqueName;
+
       // Add user to Redis sorted set with joinedAt as score
       await redis.zadd(usersKey, joinedAt, socketId);
       await redis.expire(usersKey, ENV.ROOM_EXPIRY_SECONDS);
@@ -292,6 +306,7 @@ export class RoomService {
         room,
         isHost,
         joinedAt,
+        username,
         users: activeUsers,
       };
     });
@@ -375,7 +390,7 @@ export class RoomService {
   /**
    * Updates media playback state from host CONTROL_ACTION.
    */
-  static async handleControlAction(roomCode, socketId, { action, mediaTime, playbackRate = 1.0, videoUrl, clientTimestamp }) {
+  static async handleControlAction(roomCode, socketId, { action, mediaTime, playbackRate, videoUrl, clientTimestamp }) {
     const code = roomCode.toUpperCase();
 
     return withRoomLock(code, async () => {
@@ -402,7 +417,8 @@ export class RoomService {
         nextPlaybackState = room.playbackState;
       }
 
-      const rate = Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1;
+      // The room's base speed persists across PLAY/PAUSE/SEEK unless the action names one explicitly
+      const rate = ALLOWED_PLAYBACK_RATES.includes(playbackRate) ? playbackRate : room.playbackRate || 1;
       const roomUpdates = {
         playbackState: nextPlaybackState,
         mediaTime: String(Math.max(0, mediaTime)),
@@ -472,7 +488,8 @@ export class RoomService {
         // Everyone loads paused at 0; the host starts playback once its player is ready.
         playbackState: PLAYBACK_STATE.PAUSED,
         mediaTime: '0',
-        playbackRate: '1',
+        // keep the room's chosen base speed for the next title
+        playbackRate: String(room.playbackRate || 1),
         targetTimestamp: String(now),
         queue: JSON.stringify(queue),
         updatedAt: String(now),
@@ -482,13 +499,59 @@ export class RoomService {
         videoUrl: url,
         movie: currentMovie,
         mediaTime: 0,
-        playbackRate: 1,
+        playbackRate: room.playbackRate || 1,
         playbackState: PLAYBACK_STATE.PAUSED,
         serverTimestamp: now,
         targetTimestamp: now,
         issuedBy: socketId,
         queue,
         queueChanged: Boolean(queueId),
+      };
+    });
+  }
+
+  /**
+   * Host-only: changes the room's base playback speed.
+   * The timeline is re-anchored at the moment of the change so positions computed with the
+   * old rate up to now and the new rate from now on stay continuous:
+   *   mediaTime' = position now (host-reported, else extrapolated), targetTimestamp' = now.
+   */
+  static async changePlaybackRate(roomCode, socketId, { rate, mediaTime, clientTimestamp } = {}) {
+    const code = roomCode.toUpperCase();
+    const nextRate = Number(rate);
+    if (!ALLOWED_PLAYBACK_RATES.includes(nextRate)) {
+      throw new Error(`Playback rate must be one of ${ALLOWED_PLAYBACK_RATES.join(', ')}`);
+    }
+
+    return withRoomLock(code, async () => {
+      const room = await this.getRoom(code);
+      if (!room) throw new Error(`Room ${code} not found`);
+      if (room.hostSocketId !== socketId) {
+        throw new Error('Unauthorized: Only the room host can change the playback speed');
+      }
+
+      const now = Date.now();
+      const anchor = resolveAnchorTimestamp(clientTimestamp, now);
+      const reported = Number(mediaTime);
+      const position = Number.isFinite(reported) && reported >= 0 ? reported : computeCurrentMediaTime(room, anchor);
+
+      await redis.hset(getRoomKey(code), {
+        playbackRate: String(nextRate),
+        mediaTime: String(position),
+        targetTimestamp: String(anchor),
+        updatedAt: String(now),
+      });
+
+      return {
+        rate: nextRate,
+        basePlaybackRate: nextRate,
+        playbackRate: nextRate,
+        previousRate: room.playbackRate || 1,
+        mediaTime: position,
+        targetTimestamp: anchor,
+        serverTimestamp: anchor,
+        playbackState: room.playbackState,
+        issuedBy: socketId,
       };
     });
   }

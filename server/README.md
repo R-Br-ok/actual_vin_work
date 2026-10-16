@@ -122,7 +122,7 @@ laptops on the same network can join via `http://<that-ip>:3000`.
 Body (optional):
 ```json
 {
-  "videoUrl": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+  "videoUrl": "/sample2.mp4"
 }
 ```
 Response:
@@ -131,7 +131,7 @@ Response:
   "success": true,
   "room": {
     "code": "AB39ZK",
-    "videoUrl": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+    "videoUrl": "/sample2.mp4",
     "playbackState": "PAUSED",
     "mediaTime": 0,
     "targetTimestamp": 1729040000000,
@@ -308,3 +308,14 @@ Broadcast with `io.to(roomCode)` so the **whole room, sender included**, receive
 { "id": "react-…", "emoji": "🔥", "senderId": "soc_123", "senderName": "Hana", "timestamp": 1729040000000, "roomCode": "AB39ZK", "x": 42.1 }
 ```
 Throttled to 8 reactions/second per socket; only sockets that joined the room may react.
+
+### 12. `CHANGE_PLAYBACK_RATE` → `PLAYBACK_RATE_CHANGED` (Host Only)
+- **Client Emits:** `{ "roomCode": "AB39ZK", "rate": 1.5, "mediaTime": 42.1, "clientTimestamp": 1729040000000 }` — `rate` ∈ 0.5, 0.75, 1, 1.25, 1.5, 2
+- **Server Broadcasts to Room** (`io.to(roomCode)`):
+  ```json
+  { "rate": 1.5, "basePlaybackRate": 1.5, "previousRate": 1, "mediaTime": 42.1, "targetTimestamp": 1729040000000, "playbackState": "PLAYING", "issuedBy": "soc_123" }
+  ```
+- The timeline is re-anchored at the change, so `M_expected = mediaTime + Δt × rate` stays continuous. The base speed persists across PLAY / PAUSE / SEEK and video changes (control actions no longer reset it to 1×). Viewers drift-correct relative to it (base × 1.05 / × 0.95).
+
+### 13. Unique names
+`JOIN_ROOM` de-duplicates display names within a room (case-insensitive): a second "Priya" becomes "Priya 2". The assigned name is returned as `username` in `ROOM_JOINED`. Default rooms (`POST /api/rooms` with no body) play `/sample.mp4`.

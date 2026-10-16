@@ -49,6 +49,8 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
 
   const [roomCode, setRoomCode] = useState(initialRoomCode?.toUpperCase() || '');
   const [selfId, setSelfId] = useState(null);
+  // Name the server assigned (may carry a " 2" suffix if someone in the room already uses ours)
+  const [displayName, setDisplayName] = useState(username);
   const [roomState, setRoomState] = useState(null);
   // Bumped whenever playback must be re-aligned immediately (join, control action, video change).
   // STATE_SYNC heartbeats update the anchor silently and leave correction to the 3s drift loop.
@@ -130,6 +132,7 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       hasJoinedRef.current = true;
 
       setSelfId(response.selfSocketId || socket.id);
+      if (response.username) setDisplayName(response.username);
       setRoomCode(response.roomCode);
       setRoomState(response.roomState);
       setUsers(response.users || []);
@@ -192,6 +195,14 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       setSyncEpoch((n) => n + 1);
     };
 
+    const handlePlaybackRateChanged = (payload) => {
+      const rate = Number(payload.basePlaybackRate ?? payload.rate) || 1;
+      setRoomState((prev) => (prev ? { ...prev, ...anchorFrom(payload), playbackRate: rate } : prev));
+      setLastEvent({ type: 'RATE', rate, issuedBy: payload.issuedBy });
+      setSyncEpoch((n) => n + 1);
+      pushChat(systemMessage(`Playback speed set to ${rate}×`));
+    };
+
     const handleVideoChanged = (payload) => {
       setRoomState((prev) => ({
         ...(prev || {}),
@@ -233,6 +244,7 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
     socket.on(SOCKET_EVENTS.HOST_CHANGED, handleHostChanged);
     socket.on(SOCKET_EVENTS.CONTROL_ACTION_BROADCAST, handleControlBroadcast);
     socket.on(SOCKET_EVENTS.VIDEO_CHANGED, handleVideoChanged);
+    socket.on(SOCKET_EVENTS.PLAYBACK_RATE_CHANGED, handlePlaybackRateChanged);
     socket.on(SOCKET_EVENTS.STATE_SYNC, handleStateSync);
     socket.on(SOCKET_EVENTS.QUEUE_UPDATED, handleQueueUpdated);
     socket.on(SOCKET_EVENTS.NEW_MESSAGE, handleNewMessage);
@@ -245,6 +257,7 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       socket.off(SOCKET_EVENTS.HOST_CHANGED, handleHostChanged);
       socket.off(SOCKET_EVENTS.CONTROL_ACTION_BROADCAST, handleControlBroadcast);
       socket.off(SOCKET_EVENTS.VIDEO_CHANGED, handleVideoChanged);
+      socket.off(SOCKET_EVENTS.PLAYBACK_RATE_CHANGED, handlePlaybackRateChanged);
       socket.off(SOCKET_EVENTS.STATE_SYNC, handleStateSync);
       socket.off(SOCKET_EVENTS.QUEUE_UPDATED, handleQueueUpdated);
       socket.off(SOCKET_EVENTS.NEW_MESSAGE, handleNewMessage);
@@ -255,19 +268,32 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
 
   useEffect(() => () => clearTimeout(noticeTimerRef.current), []);
 
-  // 3. Host media controls — stamped with the host's server-clock time for a precise anchor
+  // 3. Host media controls — stamped with the host's server-clock time for a precise anchor.
+  //    No playbackRate here: the room keeps its base speed (see changePlaybackRate).
   const sendControlAction = useCallback(
-    (action, mediaTime, playbackRate = 1.0) => {
+    (action, mediaTime) => {
       if (!socket || !isHost) return;
       socket.emit(SOCKET_EVENTS.CONTROL_ACTION, {
         roomCode,
         action,
         mediaTime,
-        playbackRate,
         clientTimestamp: getServerTime(),
       });
     },
     [socket, isHost, roomCode, getServerTime]
+  );
+
+  // Host: change the room's base playback speed (0.5×–2×). mediaTime = host player position now.
+  const changePlaybackRate = useCallback(
+    (rate, mediaTime) => {
+      if (!socket) return;
+      if (!isHost) {
+        showNotice('Only the host can change the playback speed.', 'info');
+        return;
+      }
+      socket.emit(SOCKET_EVENTS.CHANGE_PLAYBACK_RATE, { roomCode, rate, mediaTime, clientTimestamp: getServerTime() });
+    },
+    [socket, isHost, roomCode, getServerTime, showNotice]
   );
 
   const sendHeartbeat = useCallback(
@@ -342,7 +368,7 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
   const value = useMemo(
     () => ({
       roomCode,
-      username,
+      username: displayName,
       selfId,
       isHost,
       isConnected,
@@ -364,6 +390,7 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       getServerTime,
       // media
       sendControlAction,
+      changePlaybackRate,
       sendHeartbeat,
       changeVideo,
       playNow,
@@ -380,9 +407,9 @@ export function RoomProvider({ roomCode: initialRoomCode, username = 'Guest', ch
       triggerReaction,
     }),
     [
-      roomCode, username, selfId, isHost, isConnected, connectionError, isLoading, isRejoining, error, notice,
+      roomCode, displayName, selfId, isHost, isConnected, connectionError, isLoading, isRejoining, error, notice,
       showNotice, roomState, syncEpoch, lastEvent, users, queue, clock.clockOffset, clock.rtt, clock.isSynced,
-      getServerTime, sendControlAction, sendHeartbeat, changeVideo, playNow, playFromQueue, playNext, addToQueue,
+      getServerTime, sendControlAction, changePlaybackRate, sendHeartbeat, changeVideo, playNow, playFromQueue, playNext, addToQueue,
       removeFromQueue, moveQueueItem, clearQueue, chatMessages, sendChatMessage, triggerReaction,
     ]
   );

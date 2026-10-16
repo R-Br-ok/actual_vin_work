@@ -155,7 +155,8 @@ async function run() {
 
   const late = ClientIO(url, { transports: ['websocket'] });
   await once(late, 'connect');
-  const lateJoin = await emitAck(late, EVENTS.JOIN_ROOM, { roomCode: code, username: 'Lena' });
+  const lateJoin = await emitAck(late, EVENTS.JOIN_ROOM, { roomCode: code, username: 'vik' });
+  assert.strictEqual(lateJoin.username, 'vik 2', 'duplicate names are de-duplicated (case-insensitive)');
   assert.strictEqual(lateJoin.isHost, false);
   assert.strictEqual(lateJoin.roomState.videoUrl, TEARS);
   assert.strictEqual(lateJoin.roomState.playbackState, 'PLAYING');
@@ -167,6 +168,27 @@ async function run() {
     `late joiner expected position should be ~15.4s, got ${lateJoin.currentMediaTime}`
   );
   console.log('[PASS] late joiner snapshot (media anchor, position, queue, users, chat)');
+
+  // 4a. Playback speed: host-only, re-anchored, persists across later control actions
+  const rateSeen = once(viewer, EVENTS.PLAYBACK_RATE_CHANGED);
+  const rateRes = await emitAck(host, EVENTS.CHANGE_PLAYBACK_RATE, { rate: 1.5, mediaTime: 20, clientTimestamp: Date.now() });
+  assert.strictEqual(rateRes.success, true);
+  const rc = await rateSeen;
+  assert.strictEqual(rc.rate, 1.5);
+  assert.strictEqual(rc.basePlaybackRate, 1.5);
+  assert.strictEqual(rc.mediaTime, 20);
+  assert.strictEqual((await emitAck(viewer, EVENTS.CHANGE_PLAYBACK_RATE, { rate: 2 })).success, false, 'viewers cannot change speed');
+  assert.strictEqual((await emitAck(host, EVENTS.CHANGE_PLAYBACK_RATE, { rate: 3 })).success, false, 'rate must be in the allowed set');
+  const seekAfterRate = once(viewer, EVENTS.CONTROL_ACTION_BROADCAST);
+  host.emit(EVENTS.CONTROL_ACTION, { action: 'SEEK', mediaTime: 22 });
+  assert.strictEqual((await seekAfterRate).playbackRate, 1.5, 'SEEK without a rate keeps the room speed');
+  const roomAfterRate = await RoomService.getRoom(code);
+  await new Promise((r) => setTimeout(r, 400));
+  const { computeCurrentMediaTime } = await import('../src/services/roomService.js');
+  const advanced = computeCurrentMediaTime(await RoomService.getRoom(code)) - roomAfterRate.mediaTime;
+  assert.ok(advanced > 0.5 && advanced < 0.75, `1.5× room should advance ~0.6s in 0.4s, got ${advanced}`);
+  await emitAck(host, EVENTS.CHANGE_PLAYBACK_RATE, { rate: 1 });
+  console.log('[PASS] CHANGE_PLAYBACK_RATE -> PLAYBACK_RATE_CHANGED (host-only, persists, timeline scales)');
 
   // 6. Host leaves -> oldest remaining becomes host
   const hostChanged = once(viewer, EVENTS.HOST_CHANGED);

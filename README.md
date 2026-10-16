@@ -34,7 +34,7 @@ live chat and floating emoji reactions.
 | Realtime | **Socket.io 4** (WebSocket transport, polling fallback) |
 | Backend | **Node.js** (ES modules), **Express 4** |
 | State | **Redis** via `ioredis`, with automatic fallback to an **in-memory** store (`ioredis-mock`) when Redis isn't running |
-| Media | Plain HTML5 `<video>` with progressive MP4. Blender open movies from Google's public bucket, plus a local `/sample.mp4` |
+| Media | Plain HTML5 `<video>` with progressive MP4. The catalog plays **local files** from `client/public/` (`/sample.mp4` … `/sample4.mp4`), so it works offline |
 | Tooling | Node test scripts, a load-testing and benchmark suite (`npm run benchmark`), and an in-process WAN latency emulator |
 
 ## 2. System architecture
@@ -80,7 +80,7 @@ flowchart LR
 Socket events: `SYNC_CLOCK`, `JOIN_ROOM` → `ROOM_JOINED` / `ROOM_ERROR`, `CONTROL_ACTION` →
 `CONTROL_ACTION_BROADCAST`, `HEARTBEAT` → `STATE_SYNC`, `CHANGE_VIDEO` → `VIDEO_CHANGED`,
 `UPDATE_QUEUE` → `QUEUE_UPDATED`, `SEND_MESSAGE` → `NEW_MESSAGE`, `EMIT_REACTION` → `REACTION_BROADCAST`,
-`USER_JOINED`, `USER_LEFT`, `HOST_CHANGED`. Payloads are documented in [`server/README.md`](./server/README.md).
+`CHANGE_PLAYBACK_RATE` → `PLAYBACK_RATE_CHANGED`, `USER_JOINED`, `USER_LEFT`, `HOST_CHANGED`. Payloads are documented in [`server/README.md`](./server/README.md).
 
 ## 3. Quick start
 
@@ -153,7 +153,10 @@ Troubleshooting:
 | Late join | Open the link in a third window mid-movie. It lands on the right frame and gets the queue and chat history |
 | Video switching | Host clicks **Browse Movies**, then **Play now**: every client switches source and starts together |
 | Shared queue | Anyone clicks **Queue** in the catalog or adds a link. All participants see the identical list. The host can reorder, play or remove; the next item auto-plays at the end |
-| Fuzzy search | In **Browse Movies**, type `elefant` or `tears of stel` |
+| Fuzzy search | In **Browse Movies**, type `forrest` or `sunet` (typos are fine) |
+| Playback speed | Host: the **1×** button in the player controls → 0.5×–2×. Every viewer switches speed and stays in sync; drift nudges become base × 1.05 / 0.95 |
+| Unique names | Open the room in two tabs of the same browser plus an incognito window: each gets its own handle (e.g. `Cyber_Viewer_89`, `User_4821`), kept across refresh |
+| Landing showcase | The home page hero rotates through the catalog every 6 s with crossfading backdrops; click a slide to jump |
 | Chat & reactions | Messages and emoji appear for everyone, including the sender ("You") and the host |
 | Room validation | Open `http://localhost:3000/room/NOPE42`. You get the **Room Not Found** card, and no socket is opened |
 | Host failover | Close the host's tab. The longest-connected viewer becomes host |
@@ -238,7 +241,8 @@ The exit code is non-zero if any target fails. Full results, methodology and ana
 ├── README.md                  ← you are here
 ├── PERFORMANCE_REPORT.md      ← benchmark results & sync design
 ├── client/                    Next.js 14 app
-│   ├── public/sample.mp4      local fallback video (Movie 1)
+│   ├── public/sample*.mp4     local catalog videos (sample.mp4 = room default)
+│   ├── public/posters/        poster frames extracted from each clip
 │   └── src/
 │       ├── app/               / (home) and /room/[code] (validates code → joins)
 │       ├── components/        header/, player/ (VideoSyncPlayer, PlayerControls, DriftIndicator,
@@ -275,5 +279,5 @@ The exit code is non-zero if any target fails. Full results, methodology and ana
 - **In-memory fallback**: rooms are lost on server restart (including nodemon reloads). Use Redis for anything beyond local testing.
 - **Single-instance locking**: queue and video changes are serialized per room *within one process*. Multi-instance needs phase 2 above.
 - **Autoplay policies**: viewers who open a link directly may need one click ("Join the watch party") before audio plays. Playback starts muted otherwise.
-- **Remote catalog URLs** depend on Google's public sample bucket staying online. `/sample.mp4` always works offline.
+- **Catalog files** live in `client/public/`. To add a title, drop an MP4 there, add a poster under `public/posters/`, and add an entry to `client/src/data/mockMovies.js`.
 - **NTP asymmetry**: clock offset error is bounded by half the up/down path asymmetry, which is inherent to any round-trip time sync.

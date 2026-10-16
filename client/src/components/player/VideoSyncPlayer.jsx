@@ -31,6 +31,7 @@ export function VideoSyncPlayer() {
     isHost,
     selfId,
     sendControlAction,
+    changePlaybackRate,
     sendHeartbeat,
     getServerTime,
     clockOffset,
@@ -137,7 +138,10 @@ export function VideoSyncPlayer() {
     pendingAlignRef.current = false;
 
     // The host already applied its own control actions locally.
-    if (host && ev?.type === 'CONTROL' && ev.issuedBy === self) return;
+    if (host && (ev?.type === 'CONTROL' || ev?.type === 'RATE') && ev.issuedBy === self) {
+      video.playbackRate = state.playbackRate || 1;
+      return;
+    }
 
     if (ev?.type === 'VIDEO') {
       if (video.currentTime > 0.05) video.currentTime = 0;
@@ -235,6 +239,18 @@ export function VideoSyncPlayer() {
       sendControlAction(CONTROL_TYPE.SEEK, target);
     },
     [isHost, sendControlAction]
+  );
+
+  // Host: change the room's base speed. Applied locally at once; viewers follow on
+  // PLAYBACK_RATE_CHANGED and drift-correct relative to the new base (base × 1.05 / 0.95).
+  const handleRateChange = useCallback(
+    (rate) => {
+      const video = videoRef.current;
+      if (!isHost || !video) return;
+      video.playbackRate = rate;
+      changePlaybackRate(rate, video.currentTime);
+    },
+    [isHost, changePlaybackRate]
   );
 
   const handleSkip = useCallback((delta) => handleSeek((videoRef.current?.currentTime || 0) + delta), [handleSeek]);
@@ -475,6 +491,8 @@ export function VideoSyncPlayer() {
             isMuted={isMuted}
             isFullscreen={isFullscreen}
             hasNext={hasNext}
+            playbackRate={roomState?.playbackRate || 1}
+            onRateChange={handleRateChange}
             onPlayPause={handlePlayPause}
             onSeek={handleSeek}
             onSkip={handleSkip}
